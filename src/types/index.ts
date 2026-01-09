@@ -3,6 +3,57 @@
  * Core types for the marketplace business model
  */
 
+// ===== 3D TAXONOMY SYSTEM =====
+export interface Domain {
+    id: string;
+    slug: string;
+    name: string;
+    icon?: string;
+    description?: string;
+    displayOrder: number;
+    isActive: boolean;
+}
+
+export interface Asset {
+    id: string;
+    domainId: string;
+    slug: string;
+    name: string;
+    icon?: string;
+    description?: string;
+    displayOrder: number;
+    isActive: boolean;
+}
+
+export interface ServiceType {
+    id: string;
+    slug: string;
+    name: string;
+    description?: string;
+    icon?: string;
+    displayOrder: number;
+    isActive: boolean;
+}
+
+export interface TaxonomyPath {
+    domain: string;  // slug
+    asset: string;   // slug
+    serviceType: string; // slug
+}
+
+export interface AssetServiceCompatibility {
+    assetId: string;
+    serviceTypeId: string;
+}
+
+export interface ProviderSpecialization {
+    id: string;
+    providerId: string;
+    domainSlug?: string;
+    assetSlug?: string;
+    serviceTypeSlug?: string;
+}
+
 // ===== TICKET SYSTEM =====
 export type TicketStatus = 'NEW' | 'OFFERED' | 'ACCEPTED' | 'PAID' | 'EN_ROUTE' | 'DONE' | 'CANCELED';
 
@@ -11,7 +62,16 @@ export type TicketTrack = 'instant' | 'evaluation' | 'workshop'; // Reparo Rápi
 export interface Ticket {
     id: string;
     userId: string;
-    category: string;
+
+    // OLD: category (deprecated, use taxonomy instead)
+    category?: string;
+
+    // NEW: 3D Taxonomy
+    domainSlug?: string;
+    assetSlug?: string;
+    serviceTypeSlug?: string;
+    issueTags?: string[]; // Array of issue tags (e.g., corrente, folga)
+
     track: TicketTrack;
     description: string;
     images?: string[];
@@ -66,7 +126,7 @@ export interface TicketOffer {
 
 // ===== PROVIDER SYSTEM =====
 export type ProviderStatus = 'online' | 'offline';
-export type ProviderBadge = 'registered' | 'verified' | 'professional' | 'featured';
+export type ProviderBadge = 'registered' | 'verified' | 'professional' | 'featured' | 'Super';
 
 export interface Provider {
     id: string;
@@ -78,6 +138,7 @@ export interface Provider {
     address: string;
     coordinates: { latitude: number; longitude: number };
     distance?: string; // Calculated distance
+    rawDistance?: number; // Calculated distance in km (numeric)
 
     // Status
     status: ProviderStatus;
@@ -95,6 +156,7 @@ export interface Provider {
 
     // Pricing
     visitPrice?: string; // Base visit price
+    hourlyRate?: number; // Added to match usePartners usage
 
     // Contact (gatekeeping: only shown after ACCEPTED)
     phone?: string;
@@ -143,6 +205,34 @@ export interface LedgerEntry {
     price: number;
     warranty?: Warranty;
     status: 'completed' | 'canceled';
+}
+
+// ===== FUNNEL SYSTEM =====
+export interface QuestionOption {
+    label: string;
+    value: string;
+}
+
+export interface Question {
+    id: string;
+    text: string;
+    type: 'select' | 'boolean';
+    options?: QuestionOption[];
+    required: boolean;
+}
+
+export interface QuestionSet {
+    categoryId: string;
+    questions: Question[];
+}
+
+export interface ServiceRequest {
+    categoryId: string;
+    answers: Record<string, string>;
+    userText: string;
+    images?: string[];
+    video?: string;
+    location: { latitude: number; longitude: number };
 }
 
 // ===== USER SYSTEM =====

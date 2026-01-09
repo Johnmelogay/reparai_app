@@ -1,7 +1,17 @@
+/**
+ * File: src/app/(tabs)/profile.tsx
+ * Purpose: User Profile and Account Settings screen.
+ * Key Features:
+ * - Displays User Avatar, Name, and Phone.
+ * - Shows summary stats (Orders Count, Rating).
+ * - Navigation menu to Favorites, Payments, Help, and Chat history.
+ * - Logout logic (UI only for MVP).
+ */
 import { Colors, Layout } from '@/constants/Colors';
+import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'expo-router';
 import { ChevronRight, CircleHelp, CreditCard, Heart, LogOut, MessageCircle, User } from 'lucide-react-native';
-import React from 'react';
+import React, { useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -13,18 +23,25 @@ const MENU_ITEMS = [
     { icon: CircleHelp, label: 'Ajuda e Suporte', route: '/profile/help' },
 ];
 
+import { useProfile } from '@/hooks/useProfile';
+
 export default function ProfileScreen() {
     const router = useRouter();
+    const { isGuest, signOut } = useAuth();
+    const { profile, loading } = useProfile();
+    const [showAuth, setShowAuth] = useState(false);
+
+    // ... (keep guest logic)
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <View style={styles.header}>
                 <Image
-                    source={{ uri: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=400&q=80' }}
+                    source={{ uri: profile?.avatar_url || 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=400&q=80' }}
                     style={styles.avatar}
                 />
-                <Text style={styles.name}>João Silva</Text>
-                <Text style={styles.phone}>(69) 99312-9559</Text>
+                <Text style={styles.name}>{profile?.full_name || 'Usuário Reparaí'}</Text>
+                <Text style={styles.phone}>{profile?.phone || 'Sem telefone'}</Text>
 
                 <View style={styles.statsContainer}>
                     <View style={styles.statItem}>
@@ -56,7 +73,7 @@ export default function ProfileScreen() {
                     ))}
                 </View>
 
-                <TouchableOpacity style={styles.logoutButton}>
+                <TouchableOpacity style={styles.logoutButton} onPress={signOut}>
                     <LogOut size={20} color="#EF4444" style={{ marginRight: 10 }} />
                     <Text style={styles.logoutText}>Sair</Text>
                 </TouchableOpacity>

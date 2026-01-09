@@ -34,6 +34,12 @@ const badgeConfig = {
         color: Colors.light.primary,
         bg: Colors.light.successBackground,
     },
+    Super: {
+        label: 'Super',
+        icon: Star,
+        color: '#EF4444',
+        bg: '#FEE2E2',
+    },
 };
 
 export function Badge({ badge, size = 'md' }: BadgeProps) {

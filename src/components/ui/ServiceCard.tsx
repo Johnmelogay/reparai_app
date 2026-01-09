@@ -1,3 +1,12 @@
+/**
+ * File: src/components/ui/ServiceCard.tsx
+ * Purpose: Reusable Card component for displaying Service Order details.
+ * Key Features:
+ * - Comprehensive status visualization (Color-coded pills).
+ * - Handles Layout for Title, Provider Info, Operational Details (Time, Location).
+ * - Integrated Warranty visualizer (Progress bar + Status).
+ * - Supports primary actions (e.g., "Acionar Garantia").
+ */
 import { Colors, Layout } from '@/constants/Colors';
 import {
     Calendar,

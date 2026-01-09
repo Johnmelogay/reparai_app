@@ -1,3 +1,13 @@
+/**
+ * File: src/context/RequestContext.tsx
+ * Purpose: Global state management for the Order/Request lifecycle.
+ * Key Features:
+ * - Manages the "Draft" ticket state before submission.
+ * - Handles the transition from "Searching" -> "Matched" -> "In Progress".
+ * - Subscribes to Supabase Realtime updates for order status changes.
+ * - Provides helper functions to create orders and cancel requests.
+ */
+import { DiagnosticQuestion } from '@/services/aiService';
 import { supabase } from '@/services/supabase';
 import { Provider, Ticket, TicketStatus, TicketTrack, UserAddress } from '@/types';
 import { getItem, removeItem, saveItem, STORAGE_KEYS } from '@/utils/storage';
@@ -24,12 +34,21 @@ interface RequestState {
     providerLocation: { latitude: number; longitude: number } | null;
     eta: number | null;
     offers: Array<{ provider: Provider; price: number; estimatedTime: number; message?: string }>;
+    funnelAnswers: Record<string, string>;
+    questionsHistory: DiagnosticQuestion[]; // Store the actual questions asked
+    aiResult: any; // Store AI analysis result
+    finalConfidence: number; // Store final AI confidence score
 }
 
 interface RequestContextType extends RequestState {
     startDraft: (category: string, track: TicketTrack) => void;
     updateDraft: (description: string, images?: string[], addressDetails?: Partial<Ticket>) => void;
     setAddress: (address: UserAddress) => void;
+    setFunnelAnswer: (questionId: string, value: string) => void;
+    addQuestionsToHistory: (questions: DiagnosticQuestion[]) => void; // New action
+    setAiResult: (result: any) => void;
+    setFinalConfidence: (confidence: number) => void;
+    resetFunnel: () => void;
     submitRequest: () => Promise<string>;
     cancelRequest: () => void;
     completeRequest: () => void;
@@ -79,6 +98,10 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     const [providerLocation, setProviderLocation] = useState<{ latitude: number; longitude: number } | null>(null);
     const [eta, setEta] = useState<number | null>(null);
     const [offers, setOffers] = useState<Array<{ provider: Provider; price: number; estimatedTime: number; message?: string }>>([]);
+    const [funnelAnswers, setFunnelAnswers] = useState<Record<string, string>>({});
+    const [questionsHistory, setQuestionsHistory] = useState<DiagnosticQuestion[]>([]);
+    const [aiResult, setAiResult] = useState<any>(null);
+    const [finalConfidence, setFinalConfidence] = useState<number>(0);
 
     const locationContext = useLocation();
 
@@ -120,6 +143,10 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     // SUPABASE REALTIME LOGIC
     // ============================================
 
+    // ============================================
+    // SUPABASE REALTIME LOGIC
+    // ============================================
+
     const subscribeToOrder = (orderId: string) => {
         // Limpar subscription anterior se existir
         if (orderChannel) {
@@ -129,30 +156,32 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         console.log(`🔌 Conectando ao pedido ${orderId} no Supabase...`);
 
         const channel = supabase
-            .channel(`order_${orderId}`)
+            .channel(`request_${orderId}`)
             .on(
                 'postgres_changes',
                 {
                     event: 'UPDATE',
                     schema: 'public',
-                    table: 'orders',
+                    table: 'requests',
                     filter: `id=eq.${orderId}`,
                 },
                 (payload) => {
                     console.log('⚡ Atualização do Pedido recebida:', payload);
                     const newStatus = payload.new.status;
-                    const newProviderId = payload.new.partner_id;
-                    const newPolyline = payload.new.polyline;
+                    const newProviderId = payload.new.provider_id;
+                    const aiJson = payload.new.ai_result_json;
 
                     // Atualizar estado local
                     setStatus(newStatus);
+                    if (aiJson) {
+                        setAiResult(aiJson);
+                    }
 
                     setCurrentTicket(prev => {
                         const updated = {
                             ...prev,
                             status: newStatus,
                             providerId: newProviderId,
-                            polyline: newPolyline
                         };
                         // Importante: salvar atualização no storage para persistir entre reloads
                         saveDraft(updated);
@@ -193,10 +222,6 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             currentTicket.ticketFeePaid === true;
     };
 
-    // ============================================
-    // ACTIONS
-    // ============================================
-
     const startDraft = (cat: string, t: TicketTrack) => {
         setCategory(cat);
         setTrack(t);
@@ -208,6 +233,8 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             supabase.removeChannel(orderChannel);
             setOrderChannel(null);
         }
+
+        resetFunnel();
 
         const newTicket: Partial<Ticket> = {
             category: cat,
@@ -261,32 +288,47 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         });
     };
 
+    const setFunnelAnswer = (qId: string, value: string) => {
+        setFunnelAnswers(prev => ({ ...prev, [qId]: value }));
+    };
+
+    const addQuestionsToHistory = (newQuestions: any[]) => {
+        // Avoid duplicates based on ID
+        setQuestionsHistory(prev => {
+            const existingIds = new Set(prev.map(q => q.id));
+            const filtered = newQuestions.filter(q => !existingIds.has(q.id));
+            return [...prev, ...filtered];
+        });
+    };
+
+    const resetFunnel = () => {
+        setFunnelAnswers({});
+        setQuestionsHistory([]);
+        setAiResult(null);
+    };
+
     const submitRequest = async (): Promise<string> => {
-        // 1. Preparar dados para Supabase (Geometria PostGIS)
+        // 1. Preparar dados para Supabase
         const lat = currentTicket?.coordinates?.latitude;
         const lng = currentTicket?.coordinates?.longitude;
-
-        let userLocation = null;
-        if (lat && lng) {
-            // Formato WKT para POINT
-            userLocation = `POINT(${lng} ${lat})`;
-        }
 
         const ticketData = {
             user_id: 'd0e82c11-92af-49a3-9118-204128036021', // TODO: Pegar do Auth Real
             status: 'finding',
             category: category,
-            description: description,
-            user_address: currentTicket?.address,
-            // user_location: userLocation // TODO: Habilitar quando PostGIS estiver 100% configurado no insert
+            user_text: description, // Changed from description to user_text
+            address: currentTicket?.address, // Changed from user_address to address
+            answers_json: funnelAnswers,
+            lat: lat,
+            lng: lng
         };
 
         try {
-            console.log('🚀 Criando pedido no Supabase...', ticketData);
+            console.log('🚀 Criando pedido no Supabase (Requests)...', ticketData);
 
-            // 2. Insert na tabela 'orders'
+            // 2. Insert na tabela 'requests'
             const { data, error } = await supabase
-                .from('orders')
+                .from('requests')
                 .insert([ticketData])
                 .select()
                 .single();
@@ -314,6 +356,41 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
 
             // 4. Iniciar escuta Realtime
             subscribeToOrder(newTicketId);
+
+            // 5. Call AI Analysis (Async)
+            // Using require here to avoid import cycle issues if any, or just importing aiService at top
+            // Using dynamic import to avoid potential circular dependencies
+            const { aiService } = await import('@/services/aiService');
+
+            aiService.analyzeRequest({
+                requestId: newTicketId,
+                category: category || 'general',
+                answers: funnelAnswers,
+                userText: description,
+                lat: lat,
+                lng: lng
+            });
+
+
+            // Simulation of provider matching (for demo purposes)
+            setTimeout(() => {
+                setStatus('ACCEPTED');
+                setAssignedProvider({
+                    id: 'p1',
+                    name: 'Carlos Oliveira',
+                    category: category || 'hvac',
+                    image: 'https://i.pravatar.cc/150?u=Carlos',
+                    rating: 4.9,
+                    reviews: 128,
+                    status: 'online',
+                    distance: '1.2 km',
+                    isPremium: true,
+                    coordinates: {
+                        latitude: lat ? lat + 0.005 : -8.76,
+                        longitude: lng ? lng + 0.005 : -63.90
+                    }
+                } as any);
+            }, 8000); // Increased to give AI more time to shine
 
             return newTicketId;
 
@@ -393,6 +470,15 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             canSeeContact,
             setProviderLocation, // @ts-ignore
             setEta,              // @ts-ignore
+            funnelAnswers,
+            setFunnelAnswer,
+            aiResult,
+            setAiResult,
+            finalConfidence,
+            setFinalConfidence,
+            resetFunnel,
+            questionsHistory,
+            addQuestionsToHistory
         }}>
             {children}
         </RequestContext.Provider>

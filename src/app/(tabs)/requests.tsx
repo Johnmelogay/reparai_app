@@ -1,3 +1,12 @@
+/**
+ * File: src/app/(tabs)/requests.tsx
+ * Purpose: "My Orders" screen displaying active and past services.
+ * Key Features:
+ * - Segmented Control for "Active" vs "History".
+ * - Lists ServiceCards with detailed status (Analysis, Scheduled, In Progress, etc.).
+ * - Integrates with shared data status logic.
+ * - Navigation to Ticket Details or Chat.
+ */
 import { ServiceCard } from '@/components/ui/ServiceCard';
 import { Colors, Layout } from '@/constants/Colors';
 import { TicketStatus } from '@/types';
@@ -6,131 +15,22 @@ import React, { useState } from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
+import { useAuth } from '@/context/AuthContext';
+import { ClipboardList } from 'lucide-react-native';
+
 export default function RequestsScreen() {
     const router = useRouter();
+    const { isGuest } = useAuth();
+    const [showAuth, setShowAuth] = useState(false);
     const [filter, setFilter] = useState<'Active' | 'History'>('Active');
 
-    // Combine active tickets and ledger entries
-    const activeTickets = [
-        {
-            id: 't1',
-            status: 'NEW',
-            providerName: 'João da Silva',
-            description: 'Instalação de ar condicionado',
-            category: 'Ar Condicionado',
-            createdAt: '2025-12-26T10:00:00Z',
-            servicePrice: 250.00,
-            image: 'https://via.placeholder.com/150/FF5733/FFFFFF?text=AC',
-            warranty: {
-                startDate: '2025-12-26T10:00:00Z',
-                endDate: '2026-03-26T10:00:00Z',
-                description: 'Garantia protegida Reparaí.'
-            }
-        },
-        {
-            id: 't2',
-            status: 'OFFERED',
-            providerName: 'Maria Souza',
-            description: 'Reparo de vazamento',
-            category: 'Encanamento',
-            createdAt: '2023-10-25T14:30:00Z',
-            servicePrice: 180.00,
-            image: 'https://via.placeholder.com/150/33FF57/FFFFFF?text=Encanamento'
-        },
-        {
-            id: 't3',
-            status: 'ACCEPTED',
-            providerName: 'Pedro Santos',
-            description: 'Limpeza de caixa d\'água',
-            category: 'Limpeza',
-            createdAt: '2023-10-24T09:00:00Z',
-            servicePrice: 120.00,
-            image: 'https://via.placeholder.com/150/3357FF/FFFFFF?text=Limpeza'
-        },
-        {
-            id: 't4',
-            status: 'PAID',
-            providerName: 'Ana Costa',
-            description: 'Manutenção elétrica',
-            category: 'Eletricista',
-            createdAt: '2023-10-23T11:00:00Z',
-            servicePrice: 300.00,
-            image: 'https://via.placeholder.com/150/FF33A1/FFFFFF?text=Eletricista'
-        },
-        {
-            id: 't5',
-            status: 'EN_ROUTE',
-            providerName: 'Carlos Oliveira',
-            description: 'Montagem de móveis',
-            category: 'Montador',
-            createdAt: '2023-10-22T16:00:00Z',
-            servicePrice: 150.00,
-            image: 'https://via.placeholder.com/150/A1FF33/FFFFFF?text=Montador'
-        },
-    ].filter(t =>
-        t.status !== 'DONE' && t.status !== 'CANCELED'
-    );
+    // TODO: Connect to Real Backend
+    // For now, if logged in, we show empty state unless we persist it somewhere.
+    // The user explicitly asked to REMOVE placeholders.
+    const activeTickets: any[] = [];
+    const ledgerEntries: any[] = [];
 
-    const ledgerEntries = [
-        {
-            id: 'l1',
-            ledgerId: 'L001',
-            providerName: 'Clima Bom',
-            service: 'Manutenção AC',
-            date: '2025-11-20T10:00:00Z',
-            price: 250.00,
-            warranty: {
-                startDate: '2025-11-20T10:00:00Z',
-                endDate: '2026-02-20T10:00:00Z', // Active
-                description: 'Garantia de 3 meses para o serviço de manutenção.',
-            },
-            image: 'https://via.placeholder.com/150/FF5733/FFFFFF?text=AC'
-        },
-        {
-            id: 'l2',
-            ledgerId: 'L002',
-            providerName: 'Borracharia JP',
-            service: 'Troca de Pneu',
-            date: '2023-10-15T14:00:00Z',
-            price: 80.00,
-            warranty: null,
-            image: 'https://via.placeholder.com/150/33FF57/FFFFFF?text=Pneu'
-        },
-        {
-            id: 'l3',
-            ledgerId: 'L003',
-            providerName: 'Eletricista Silva',
-            service: 'Instalação de Tomada',
-            date: '2025-12-10T09:00:00Z',
-            price: 100.00,
-            warranty: {
-                startDate: '2025-12-10T09:00:00Z',
-                endDate: '2026-04-10T09:00:00Z', // Clearly ACTIVE
-                description: 'Garantia de 6 meses para a instalação elétrica.',
-            },
-            image: 'https://via.placeholder.com/150/3357FF/FFFFFF?text=Eletricista'
-        },
-        {
-            id: 'l4',
-            ledgerId: 'L004',
-            providerName: 'Encanador Souza',
-            service: 'Desentupimento',
-            date: '2023-10-05T11:00:00Z',
-            price: 150.00,
-            warranty: null,
-            image: 'https://via.placeholder.com/150/FF33A1/FFFFFF?text=Encanador'
-        },
-        {
-            id: 'l5',
-            ledgerId: 'L005',
-            providerName: 'Jardineiro Verde',
-            service: 'Corte de Grama',
-            date: '2023-09-30T16:00:00Z',
-            price: 70.00,
-            warranty: null,
-            image: 'https://via.placeholder.com/150/A1FF33/FFFFFF?text=Jardim'
-        },
-    ];
 
     const filteredData = filter === 'Active'
         ? activeTickets
@@ -214,6 +114,35 @@ export default function RequestsScreen() {
             />
         );
     };
+
+    if (isGuest) {
+        return (
+            <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]} edges={['top']}>
+                <View style={{ alignItems: 'center', marginBottom: 40 }}>
+                    <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+                        <ClipboardList size={40} color="#9CA3AF" />
+                    </View>
+                    <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111', marginBottom: 10 }}>Seus Pedidos</Text>
+                    <Text style={{ textAlign: 'center', color: '#666', fontSize: 16, lineHeight: 24 }}>
+                        Faça login para acompanhar seus pedidos em andamento e ver seu histórico.
+                    </Text>
+                </View>
+
+                <TouchableOpacity
+                    style={{ backgroundColor: Colors.light.primary, paddingVertical: 16, paddingHorizontal: 32, borderRadius: 12, width: '100%', alignItems: 'center' }}
+                    onPress={() => setShowAuth(true)}
+                >
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Entrar</Text>
+                </TouchableOpacity>
+
+                <AuthBottomSheet
+                    visible={showAuth}
+                    onClose={() => setShowAuth(false)}
+                    onSuccess={() => setShowAuth(false)}
+                />
+            </SafeAreaView>
+        );
+    }
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>

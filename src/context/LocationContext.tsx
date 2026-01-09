@@ -1,3 +1,12 @@
+/**
+ * File: src/context/LocationContext.tsx
+ * Purpose: Manages User Location and Address Selection.
+ * Key Features:
+ * - Tracks current device geolocation (latitude/longitude).
+ * - Manages the "Selected Address" (where the service is needed).
+ * - Persists selected location to AsyncStorage for app restarts.
+ * - formatting and reverse geocoding utilities.
+ */
 import { getItem, saveItem, STORAGE_KEYS } from '@/utils/storage';
 import * as Location from 'expo-location';
 import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';

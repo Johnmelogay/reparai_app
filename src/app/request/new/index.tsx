@@ -21,104 +21,46 @@
 import { Card } from '@/components/ui/Card';
 import { Colors, Layout } from '@/constants/Colors';
 import { useRequest } from '@/context/RequestContext';
-import { CATEGORIES } from '@/services/mockData';
+import { DOMAINS } from '@/services/mockData';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SelectCategoryScreen() {
-    // ============================================
-    // HOOKS E VARIÁVEIS
-    // ============================================
-
-    // router: usado para navegar entre telas
-    // router.push() = vai para outra tela
-    // router.back() = volta para tela anterior
     const router = useRouter();
-
-    // params: parâmetros passados pela tela anterior
-    // Exemplo: /request/new?mode=instant
-    // params.mode = 'instant'
     const params = useLocalSearchParams();
-
-    // mode: tipo de serviço escolhido na home
-    // 'instant' = Reparo rápido
-    // 'evaluation' = Precisa avaliar
-    // 'workshop' = Levar para oficina
-    // Se não vier parâmetro, usa 'instant' como padrão
     const mode = (params.mode as string) || 'instant';
-
-    // startDraft: função do contexto para iniciar rascunho
-    // Vem de RequestContext (veja src/context/RequestContext.tsx)
     const { startDraft } = useRequest();
 
-    /**
-     * Função chamada quando usuário clica em uma categoria
-     * 
-     * Parâmetro:
-     * - category: ID da categoria (ex: 'electronics', 'agro')
-     * 
-     * O QUE FAZ:
-     * 1. Inicia rascunho no contexto (salva categoria e tipo de serviço)
-     * 2. Navega para tela de localização
-     * 
-     * PODE ALTERAR:
-     * - Adicione validações antes de navegar
-     * - Adicione animação ou feedback visual
-     * - Mude o destino (pathname) se quiser ir para outra tela
-     */
-    const handleSelect = (category: string) => {
-        // Salva no contexto: categoria e tipo de serviço
-        startDraft(category, mode as 'instant' | 'evaluation' | 'workshop');
-
-        // Vai diretamente para tela de detalhes, pois a localização agora é tratada lá
+    const handleSelect = (domainSlug: string) => {
+        // Start draft with domain slug instead of category
+        startDraft(domainSlug, mode as 'instant' | 'evaluation' | 'workshop');
         router.push({
-            pathname: '/request/new/details',  // Caminho da próxima tela
-            params: { category, mode }          // Dados passados para próxima tela
+            pathname: '/request/new/describe',
+            params: { category: domainSlug, mode } // Keep 'category' param for compatibility
         });
     };
 
-    /**
-     * Função que renderiza cada item da lista de categorias
-     * 
-     * Parâmetro:
-     * - item: uma categoria do array CATEGORIES
-     * 
-     * O QUE FAZ:
-     * 1. Verifica se categoria suporta o tipo de serviço escolhido
-     * 2. Se não suportar, não mostra (return null)
-     * 3. Se suportar, mostra card clicável
-     * 
-     * PODE ALTERAR:
-     * - Layout do card (tamanho, cores, espaçamento)
-     * - Adicione animação ao tocar
-     * - Adicione mais informações no card
-     */
-    const renderItem = ({ item }: { item: typeof CATEGORIES[0] }) => {
-        // Verifica se esta categoria suporta o tipo de serviço escolhido
-        // Exemplo: se mode='instant', só mostra categorias que têm 'instant' em tracks
+    const renderItem = ({ item }: { item: typeof DOMAINS[0] }) => {
         const supportsTrack = item.tracks?.includes(mode as any);
-
-        // Se não suportar, não renderiza nada
         if (!supportsTrack) return null;
 
         return (
-            <TouchableOpacity onPress={() => handleSelect(item.id)} style={styles.gridItem}>
-                <Card style={styles.card} padding={16}>
+            <TouchableOpacity onPress={() => handleSelect(item.slug)} style={styles.gridItem}>
+                <Card style={styles.card} padding={15}>
                     <View style={styles.iconWrapper}>
                         <Image source={item.icon} style={styles.iconImage} resizeMode="contain" />
                     </View>
-                    <Text style={styles.label}>{item.name}</Text>
-                    {item.description && (
-                        <Text style={styles.description}>{item.description}</Text>
-                    )}
+                    <Text style={styles.label} numberOfLines={1} adjustsFontSizeToFit>{item.name}</Text>
+                    {/* Description removed for compact grid */}
                 </Card>
             </TouchableOpacity>
         );
     };
 
     return (
-        <View style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                     <Text style={styles.backButtonText}>←</Text>
@@ -128,146 +70,84 @@ export default function SelectCategoryScreen() {
             </View>
 
             <View style={styles.content}>
-                {/* TÍTULO E SUBTÍTULO - PODE ALTERAR OS TEXTOS */}
                 <Text style={styles.title}>Do que você precisa?</Text>
-                <Text style={styles.subtitle}>Escolha uma categoria para começar</Text>
+                <Text style={styles.subtitle}>Escolha um domínio</Text>
 
-                {/* LISTA DE CATEGORIAS */}
-                {/* FlatList: componente que renderiza lista otimizada */}
                 <FlatList
-                    data={CATEGORIES}                    // Dados: vem de mockData.ts
-                    renderItem={renderItem}              // Função que renderiza cada item
-                    keyExtractor={item => item.id}       // Chave única de cada item
-                    numColumns={2}                       // Grid de 2 colunas (pode mudar para 3)
-                    contentContainerStyle={styles.list}  // Estilo do container
-                    showsVerticalScrollIndicator={false} // Esconde barra de rolagem
+                    data={DOMAINS}
+                    renderItem={renderItem}
+                    keyExtractor={item => item.id}
+                    numColumns={2}
+                    columnWrapperStyle={styles.columnWrapper}
+                    contentContainerStyle={styles.list}
+                    showsVerticalScrollIndicator={false}
                 />
             </View>
-        </View>
+        </SafeAreaView>
     );
 }
 
-/**
- * ============================================
- * ESTILOS (STYLES)
- * ============================================
- * 
- * Define como os elementos aparecem na tela.
- * 
- * PROPRIEDADES COMUNS:
- * - flex: 1 = ocupa todo espaço disponível
- * - backgroundColor: cor de fundo
- * - padding: espaçamento interno
- * - margin: espaçamento externo
- * - fontSize: tamanho da fonte
- * - fontWeight: 'bold' = negrito, 'normal' = normal
- * - color: cor do texto
- * - borderRadius: arredondamento das bordas
- * 
- * CORES:
- * - Vêm de Colors.light (veja src/constants/Colors.ts)
- * - Pode usar cores diretas: '#FF0000' (vermelho)
- * 
- * ESPAÇAMENTOS:
- * - Vêm de Layout.spacing (veja src/constants/Colors.ts)
- * - Ou use números diretos: 10, 20, etc.
- */
 const styles = StyleSheet.create({
-    // Container principal (tela inteira)
     container: {
-        flex: 1,                              // Ocupa toda altura disponível
-        backgroundColor: Colors.light.background,  // Cor de fundo (vem de Colors.ts)
-    },
-    // Cabeçalho da tela (barra superior)
-    header: {
-        flexDirection: 'row',              // Elementos em linha (horizontal)
-        alignItems: 'center',              // Alinha verticalmente ao centro
-        justifyContent: 'space-between',   // Espaça elementos (esquerda, centro, direita)
-        paddingHorizontal: 20,             // Espaçamento lateral (esquerda/direita)
-        paddingVertical: 16,                // Espaçamento vertical (cima/baixo)
-        backgroundColor: '#fff',           // Fundo branco (pode mudar)
-        borderBottomWidth: 1,               // Espessura da borda inferior
-        borderBottomColor: '#f0f0f0',      // Cor da borda (cinza claro)
-    },
-    // Botão de voltar (seta ←)
-    backButton: {
-        padding: 4,                        // Espaçamento interno (área clicável)
-    },
-    // Texto do botão voltar
-    backButtonText: {
-        fontSize: 24,                      // Tamanho da fonte (pode mudar)
-        color: Colors.light.text,          // Cor do texto (vem de Colors.ts)
-    },
-    // Título do cabeçalho
-    headerTitle: {
-        fontSize: 18,                      // Tamanho da fonte
-        fontWeight: 'bold',                // Negrito
-        color: Colors.light.text,         // Cor do texto
-    },
-    // Área de conteúdo (abaixo do cabeçalho)
-    content: {
-        flex: 1,                           // Ocupa espaço restante
-        padding: Layout.spacing.lg,        // Espaçamento interno (24px)
-        paddingTop: 24,                     // Espaçamento superior extra
-    },
-    // Título principal
-    title: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        color: Colors.light.text,
-        marginBottom: Layout.spacing.xs,
-    },
-    // Subtítulo
-    subtitle: {
-        fontSize: 16,
-        color: Colors.light.textSecondary,
-        marginBottom: Layout.spacing.xl,
-    },
-    // Container da lista
-    list: {
-        paddingBottom: Layout.spacing.xl,
-    },
-    // Item do grid (cada card de categoria)
-    gridItem: {
         flex: 1,
-        margin: Layout.spacing.sm,
+        backgroundColor: Colors.light.background,
     },
-    // Card de categoria
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingBottom: 15, // Reduced padding bottom since SafeArea handles top
+        paddingTop: 10,
+        backgroundColor: Colors.light.background, // Match bg to avoid hard cut
+    },
+    backButton: { padding: 4 },
+    backButtonText: { fontSize: 24, color: Colors.light.text },
+    headerTitle: { fontSize: 16, fontWeight: '700', color: Colors.light.text },
+    content: { flex: 1, paddingHorizontal: 20 },
+    title: {
+        fontSize: 24, // Smaller title
+        fontWeight: '900',
+        color: Colors.light.text,
+        marginBottom: 4,
+        letterSpacing: -0.5,
+        marginTop: 10
+    },
+    subtitle: {
+        fontSize: 16, // Smaller subtitle
+        color: Colors.light.textSecondary,
+        marginBottom: 20,
+    },
+    list: { paddingBottom: 40 },
+    columnWrapper: { justifyContent: 'space-between', gap: 15 },
+    gridItem: {
+        width: '48%', // Flexible width for 2 columns with gap
+        marginBottom: 15,
+    },
     card: {
         alignItems: 'center',
         justifyContent: 'center',
-        height: 140,
-        borderRadius: Layout.radius.lg,
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.06)',
+        height: 140, // Fixed compact height
+        borderRadius: 20,
         backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.03)',
         ...Layout.shadows.small,
     },
-    // Container do ícone
     iconWrapper: {
-        width: 60,                         // Largura do ícone
-        height: 60,                         // Altura do ícone
-        marginBottom: 12,                   // Espaço abaixo do ícone
-        alignItems: 'center',              // Centraliza horizontalmente
-        justifyContent: 'center',          // Centraliza verticalmente
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        backgroundColor: '#F8F9FA',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 12,
     },
-    // Imagem do ícone
-    iconImage: {
-        width: '100%',                     // Largura 100% do container
-        height: '100%',                     // Altura 100% do container
-    },
-    // Nome da categoria
+    iconImage: { width: 32, height: 32 },
     label: {
-        fontSize: 14,                       // Tamanho da fonte
-        fontWeight: '600',                  // Semi-negrito (pode ser 'bold', 'normal')
-        color: Colors.light.text,          // Cor do texto
-        textAlign: 'center',               // Texto centralizado
+        fontSize: 15,
+        fontWeight: '700',
+        color: Colors.light.text,
+        textAlign: 'center',
     },
-    // Descrição da categoria
-    description: {
-        fontSize: 11,                      // Fonte pequena
-        color: Colors.light.textSecondary, // Cor secundária
-        textAlign: 'center',               // Centralizado
-        marginTop: 4,                      // Espaço acima
-    }
 });

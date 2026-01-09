@@ -1,121 +1,360 @@
+/**
+ * File: src/app/(tabs)/search.tsx
+ * Purpose: Premium Global Search screen with Advanced Filtering & GIS Ranking.
+ */
+import { FilterModal, FilterState } from '@/components/modals/FilterModal';
 import { Colors, Layout } from '@/constants/Colors';
+import { useLocation } from '@/context/LocationContext'; // New: Location context
+import { useDebounce } from '@/hooks/useDebounce'; // New: Debounce hook
 import { usePartners } from '@/hooks/usePartners';
+import { useSearchHistory } from '@/hooks/useSearchHistory';
+import { formatDistance } from '@/utils/geo'; // New: GIS Utils
 import { useRouter } from 'expo-router';
-import { MapPin, Search, Star, X } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Clock, Filter, MapPin, Search, SlidersHorizontal, Star, X } from 'lucide-react-native';
+import React, { useMemo, useState } from 'react';
+import {
+    FlatList,
+    Image,
+    Keyboard,
+    LayoutAnimation,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    TouchableWithoutFeedback,
+    UIManager,
+    View
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const POPULAR_SEARCHES = ['Eletricista', 'Encanador', 'Limpeza AC', 'Jardineiro', 'Mecânico'];
+// Enable LayoutAnimation on Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+    UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
-const TOP_CATEGORIES = [
-    { name: 'Mecânica', icon: require('../../../assets/images/wrench_tool.png') },
-    { name: 'Refrigeração', icon: require('../../../assets/images/snowflake.png') },
-    { name: 'Elétrica', icon: require('../../../assets/images/electric_plug.png') },
-    { name: 'Jardinagem', icon: require('../../../assets/images/plant.png') },
+const DOMAINS = [
+    { name: 'Mobilidade', slug: 'mobilidade', icon: 'car' },
+    { name: 'Casa', slug: 'casa', icon: 'home' },
+    { name: 'Tecnologia', slug: 'tecnologia', icon: 'cpu' },
 ];
 
+const DOMAIN_MAPPING: Record<string, string[]> = {
+    'mobilidade': ['auto'],
+    'casa': ['hvac', 'plumbing', 'gardening', 'cleaning', 'beauty', 'carpentry', 'pest_control', 'handyman', 'electrical'],
+    'tecnologia': ['electronics']
+};
+
+const FILTER_TYPES = ['Todos', 'Oficinas', 'Autônomos', 'Online'];
+
 export default function SearchScreen() {
-    const [query, setQuery] = useState('');
-    const { providers: displayProviders } = usePartners(); // Using shared data
     const router = useRouter();
+    const { providers: allProviders, loading: loadingProviders } = usePartners();
+    const { history, addToHistory, removeFromHistory, clearHistory } = useSearchHistory();
+    const { location, selectedLocation } = useLocation();
 
-    // Filter logic
-    const results = query.length > 0
-        ? displayProviders.filter(p =>
-            p.name.toLowerCase().includes(query.toLowerCase()) ||
-            p.category.toLowerCase().includes(query.toLowerCase())
-        )
-        : [];
+    // UI State
+    const [query, setQuery] = useState('');
+    const debouncedQuery = useDebounce(query, 300); // 300ms delay
+    const [isFocused, setIsFocused] = useState(false);
+    const [filterModalVisible, setFilterModalVisible] = useState(false);
 
-    const handleCategoryPress = (categoryName: string) => {
-        setQuery(categoryName);
+    // Filter State
+    const [activeTypeFilter, setActiveTypeFilter] = useState('Todos');
+    const [advancedFilters, setAdvancedFilters] = useState<FilterState>({
+        sortBy: 'nearest',
+        maxDistance: 20, // Default 20km
+        minRating: 0
+    });
+
+    // Computed Results (Memoized for performance)
+    const filteredResults = useMemo(() => {
+        // If not searching and no filters applied (default state), show nothing
+        const isDefaultState = !debouncedQuery && activeTypeFilter === 'Todos' && advancedFilters.minRating === 0 && advancedFilters.maxDistance === 20;
+
+        if (isDefaultState) return [];
+
+        let results = allProviders.map(p => {
+            // Use pre-calculated rawDistance from hook (which respects selectedLocation)
+            // If missing, fallback to 9999
+            return { ...p, calculatedDistance: p.rawDistance ?? 9999 };
+        });
+
+        // 2. Filter Logic
+        results = results.filter(p => {
+            // Text Match (Name OR Domain OR Legacy Category)
+            const lowerQ = debouncedQuery.toLowerCase();
+
+            // Check if query is a Domain name
+            const isDomainSearch = Object.keys(DOMAIN_MAPPING).some(d => d.includes(lowerQ));
+            let matchesDomain = false;
+            if (isDomainSearch) {
+                // Find which domain matches the query
+                const targetDomain = Object.keys(DOMAIN_MAPPING).find(d => d.includes(lowerQ));
+                if (targetDomain) {
+                    const validCategories = DOMAIN_MAPPING[targetDomain];
+                    matchesDomain = validCategories.includes(p.category || '');
+                }
+            }
+
+            const matchesText = !lowerQ ||
+                p.name.toLowerCase().includes(lowerQ) ||
+                p.category.toLowerCase().includes(lowerQ) ||
+                matchesDomain;
+
+            // Type Filter
+            let matchesType = true;
+            if (activeTypeFilter === 'Oficinas') matchesType = p.address !== 'Prestador autônomo';
+            if (activeTypeFilter === 'Autônomos') matchesType = p.address === 'Prestador autônomo';
+            if (activeTypeFilter === 'Online') matchesType = p.status === 'online';
+
+            // Advanced Filters
+            const matchesRating = !advancedFilters.minRating || (p.rating || 0) >= advancedFilters.minRating;
+            const matchesDistance = p.calculatedDistance <= advancedFilters.maxDistance;
+
+            // Strict User Requirement: Offline providers must NOT appear in search results
+            const isOnline = p.status === 'online';
+
+            return matchesText && matchesType && matchesRating && matchesDistance && isOnline;
+        });
+
+        // 3. Sorting Logic
+        results.sort((a, b) => {
+            switch (advancedFilters.sortBy) {
+                case 'nearest':
+                    return a.calculatedDistance - b.calculatedDistance;
+                case 'rating':
+                    return (b.rating || 0) - (a.rating || 0);
+                case 'price_asc':
+                    return (a.hourlyRate || 0) - (b.hourlyRate || 0);
+                default:
+                    return 0;
+            }
+        });
+
+        return results;
+
+    }, [debouncedQuery, activeTypeFilter, advancedFilters, allProviders]);
+
+    const handleSearchSubmit = () => {
+        if (query.trim()) {
+            addToHistory(query.trim());
+            Keyboard.dismiss();
+        }
     };
+
+    const handleHistoryTap = (term: string) => {
+        setQuery(term);
+    };
+
+    const clearQuery = () => {
+        setQuery('');
+        setAdvancedFilters(prev => ({ ...prev, minRating: 0, maxDistance: 20 })); // Reset advanced filters on clear? Optional.
+        // Actually, clearing search box shouldn't necessarily reset advanced filters, but usually resets the flow.
+        Keyboard.dismiss();
+    };
+
+    const renderResultItem = ({ item }: { item: any }) => (
+        <TouchableOpacity
+            style={styles.resultCard}
+            onPress={() => {
+                if (query) addToHistory(query);
+                router.push(`/provider/${item.id}`);
+            }}
+        >
+            <Image
+                source={{ uri: item.image || 'https://via.placeholder.com/150' }}
+                style={styles.resultImage}
+            />
+            <View style={styles.resultContent}>
+                <View style={styles.resultHeader}>
+                    <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
+                    {item.status === 'online' && <View style={styles.onlineDot} />}
+                </View>
+                <Text style={styles.resultCategory}>{item.category}</Text>
+
+                <View style={styles.metaRow}>
+                    <View style={styles.ratingBadge}>
+                        <Star size={10} color="#F59E0B" fill="#F59E0B" />
+                        <Text style={styles.ratingText}>{item.rating?.toFixed(1) || 'N/A'}</Text>
+                    </View>
+                    <Text style={styles.dot}>•</Text>
+                    <View style={styles.locationBadge}>
+                        <MapPin size={10} color="#666" />
+                        <Text style={styles.distanceText}>
+                            {/* Use calculated GIS distance if available, fallback to item.distance */}
+                            {location ? formatDistance(item.calculatedDistance) : item.distance}
+                        </Text>
+                    </View>
+                    {item.hourlyRate && (
+                        <>
+                            <Text style={styles.dot}>•</Text>
+                            <Text style={styles.priceText}>R$ {item.hourlyRate}/h</Text>
+                        </>
+                    )}
+                </View>
+            </View>
+        </TouchableOpacity>
+    );
+
+    // Determines if we are in "Search Mode" (query typed OR filters active)
+    const isSearchMode = query.length > 0 || activeTypeFilter !== 'Todos' || advancedFilters.minRating > 0 || advancedFilters.sortBy !== 'nearest';
+    // Use filteredResults length to decide what to show
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
-            <View style={styles.header}>
-                <Text style={styles.title}>Buscar</Text>
-            </View>
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <View style={{ flex: 1 }}>
+                    {/* Header */}
+                    <View style={styles.header}>
+                        <Text style={styles.pageTitle}>Buscar</Text>
+                    </View>
 
-            <View style={styles.searchBarContainer}>
-                <Search size={20} color="#999" style={styles.searchIcon} />
-                <TextInput
-                    style={styles.input}
-                    placeholder="O que você precisa?"
-                    value={query}
-                    onChangeText={setQuery}
-                    placeholderTextColor="#999"
-                    autoFocus={false}
-                />
-                {query.length > 0 && (
-                    <TouchableOpacity onPress={() => setQuery('')}>
-                        <X size={18} color="#999" />
-                    </TouchableOpacity>
-                )}
-            </View>
+                    {/* Search Input Row */}
+                    <View style={styles.searchContainer}>
+                        <View style={[styles.inputWrapper, isFocused && styles.inputWrapperFocused]}>
+                            <Search size={20} color={isFocused ? Colors.light.primary : '#9CA3AF'} />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Profissional ou categoria..."
+                                placeholderTextColor="#9CA3AF"
+                                value={query}
+                                onChangeText={setQuery} // Updates immediately, useDebounce handles logic
+                                onFocus={() => setIsFocused(true)}
+                                onBlur={() => setIsFocused(false)}
+                                onSubmitEditing={handleSearchSubmit}
+                                returnKeyType="search"
+                            />
+                            {query.length > 0 && (
+                                <TouchableOpacity onPress={clearQuery}>
+                                    <View style={styles.clearBtn}>
+                                        <X size={12} color="#fff" />
+                                    </View>
+                                </TouchableOpacity>
+                            )}
+                        </View>
 
-            {/* Results or Suggestions */}
-            {query.length > 0 ? (
-                <FlatList
-                    data={results}
-                    keyExtractor={item => item.id}
-                    contentContainerStyle={styles.resultsList}
-                    renderItem={({ item }) => (
-                        <TouchableOpacity style={styles.resultItem} onPress={() => router.push(`/provider/${item.id}`)}>
-                            <View style={styles.resultImagePlaceholder}>
-                                <Text style={styles.initial}>{item.name[0]}</Text>
-                            </View>
-                            <View style={styles.resultInfo}>
-                                <Text style={styles.resultName}>{item.name}</Text>
-                                <Text style={styles.resultCategory}>{item.category}</Text>
-                                <View style={styles.ratingRow}>
-                                    <Star size={12} color="#F59E0B" fill="#F59E0B" />
-                                    <Text style={styles.ratingText}>{item.rating}</Text>
-                                    <Text style={styles.dot}>•</Text>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                        <MapPin size={12} color="#999" />
-                                        <Text style={styles.distanceText}>{item.distance}</Text>
+                        {/* Filter Button */}
+                        <TouchableOpacity
+                            style={[
+                                styles.filterBtn,
+                                (advancedFilters.sortBy !== 'nearest' || advancedFilters.minRating > 0 || advancedFilters.maxDistance !== 20) && styles.filterBtnActive
+                            ]}
+                            onPress={() => setFilterModalVisible(true)}
+                        >
+                            <SlidersHorizontal
+                                size={20}
+                                color={(advancedFilters.sortBy !== 'nearest' || advancedFilters.minRating > 0 || advancedFilters.maxDistance !== 20) ? '#fff' : '#333'}
+                            />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Type Filters (Pills) */}
+                    <View style={styles.filterRow}>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20 }}>
+                            {FILTER_TYPES.map(type => (
+                                <TouchableOpacity
+                                    key={type}
+                                    style={[styles.filterChip, activeTypeFilter === type && styles.filterChipActive]}
+                                    onPress={() => {
+                                        setActiveTypeFilter(type);
+                                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                    }}
+                                >
+                                    <Text style={[styles.filterText, activeTypeFilter === type && styles.filterTextActive]}>
+                                        {type}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+
+                    {/* Content Body */}
+                    <View style={styles.body}>
+                        {/* Show Results if searching/filtering, otherwise History/Categories */}
+                        {isSearchMode ? (
+                            <FlatList
+                                data={filteredResults}
+                                keyExtractor={item => item.id}
+                                renderItem={renderResultItem}
+                                contentContainerStyle={styles.resultsList}
+                                ListEmptyComponent={
+                                    <View style={styles.emptyState}>
+                                        <Filter size={48} color="#E5E7EB" />
+                                        <Text style={styles.emptyTitle}>Nenhum resultado encontrado</Text>
+                                        <Text style={styles.emptySub}>Ajuste os filtros ou tente outro termo.</Text>
+                                    </View>
+                                }
+                            />
+                        ) : (
+                            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+                                {/* Recent Searches */}
+                                {history.length > 0 && (
+                                    <View style={styles.section}>
+                                        <View style={styles.sectionHeader}>
+                                            <Text style={styles.sectionTitle}>Recentes</Text>
+                                            <TouchableOpacity onPress={clearHistory}>
+                                                <Text style={styles.clearText}>Limpar</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                        <View style={styles.historyList}>
+                                            {history.map((term, idx) => (
+                                                <TouchableOpacity
+                                                    key={idx}
+                                                    style={styles.historyItem}
+                                                    onPress={() => handleHistoryTap(term)}
+                                                >
+                                                    <Clock size={14} color="#9CA3AF" style={{ marginRight: 8 }} />
+                                                    <Text style={styles.historyText}>{term}</Text>
+                                                    <TouchableOpacity
+                                                        style={{ padding: 4 }}
+                                                        onPress={() => removeFromHistory(term)}
+                                                    >
+                                                        <X size={12} color="#D1D5DB" />
+                                                    </TouchableOpacity>
+                                                </TouchableOpacity>
+                                            ))}
+                                        </View>
+                                    </View>
+                                )}
+
+                                {/* Categories (now Domains) */}
+                                <View style={styles.section}>
+                                    <Text style={styles.sectionTitle}>Navegar por Área</Text>
+                                    <View style={styles.grid}>
+                                        {DOMAINS.map((domain, idx) => (
+                                            <TouchableOpacity
+                                                key={idx}
+                                                style={styles.gridCard}
+                                                onPress={() => setQuery(domain.name)} // Search by Domain name
+                                            >
+                                                <View style={[styles.iconCircle, { backgroundColor: idx % 2 === 0 ? '#EFF6FF' : '#FFF7ED' }]}>
+                                                    <Text style={{ fontSize: 20 }}>
+                                                        {domain.icon === 'car' ? '🚗' :
+                                                            domain.icon === 'home' ? '🏠' : '💻'}
+                                                    </Text>
+                                                </View>
+                                                <Text style={styles.gridLabel}>{domain.name}</Text>
+                                            </TouchableOpacity>
+                                        ))}
                                     </View>
                                 </View>
-                            </View>
-                        </TouchableOpacity>
-                    )}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>Nenhum profissional encontrado.</Text>
-                        </View>
-                    }
-                />
-            ) : (
-                <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Buscas Recentes</Text>
-                        <View style={styles.chipContainer}>
-                            {POPULAR_SEARCHES.map((item, index) => (
-                                <TouchableOpacity key={index} style={styles.chip} onPress={() => setQuery(item)}>
-                                    <Text style={styles.chipText}>{item}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
+                            </ScrollView>
+                        )}
                     </View>
 
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Categorias Populares</Text>
-                        <View style={styles.gridContainer}>
-                            {TOP_CATEGORIES.map((cat, idx) => (
-                                <TouchableOpacity key={idx} style={styles.gridItem} onPress={() => handleCategoryPress(cat.name)}>
-                                    <View style={styles.iconWrapper}>
-                                        <Image source={cat.icon} style={styles.icon} />
-                                    </View>
-                                    <Text style={styles.gridLabel}>{cat.name}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    </View>
-
-                </ScrollView>
-            )}
+                    {/* Filter Modal */}
+                    <FilterModal
+                        visible={filterModalVisible}
+                        onClose={() => setFilterModalVisible(false)}
+                        onApply={(newFilters) => {
+                            setAdvancedFilters(newFilters);
+                        }}
+                        currentFilters={advancedFilters}
+                    />
+                </View>
+            </TouchableWithoutFeedback>
         </SafeAreaView>
     );
 }
@@ -127,168 +366,267 @@ const styles = StyleSheet.create({
     },
     header: {
         paddingHorizontal: 20,
-        paddingBottom: 10,
         paddingTop: 10,
+        paddingBottom: 5,
     },
-    title: {
-        fontSize: 32,
-        fontWeight: 'bold',
-        color: Colors.light.text,
+    pageTitle: {
+        fontSize: 28,
+        fontWeight: '800',
+        color: '#111',
+        letterSpacing: -0.5,
     },
-    searchBarContainer: {
+    searchContainer: {
+        paddingHorizontal: 20,
+        marginVertical: 15,
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: Colors.light.background,
-        marginHorizontal: Layout.spacing.lg,
-        paddingHorizontal: 15,
-        height: 52,
-        borderRadius: Layout.radius.md,
-        marginBottom: Layout.spacing.md,
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.05)',
     },
-    searchIcon: {
-        marginRight: 10,
+    inputWrapper: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        height: 52,
+        borderRadius: 16,
+        paddingHorizontal: 16,
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    inputWrapperFocused: {
+        backgroundColor: '#fff',
+        borderColor: Colors.light.primary,
+        ...Layout.shadows.small,
     },
     input: {
         flex: 1,
+        marginLeft: 10,
         fontSize: 16,
-        color: Colors.light.text,
+        color: '#111',
         height: '100%',
     },
+    clearBtn: {
+        backgroundColor: '#D1D5DB',
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    filterBtn: {
+        width: 52,
+        height: 52,
+        borderRadius: 16,
+        backgroundColor: '#F3F4F6',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginLeft: 12,
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    filterBtnActive: {
+        backgroundColor: Colors.light.primary,
+        borderColor: Colors.light.primary,
+    },
+    filterRow: {
+        marginBottom: 10,
+        height: 40,
+    },
+    filterChip: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 20,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        marginRight: 8,
+        height: 36,
+    },
+    filterChipActive: {
+        backgroundColor: '#111',
+        borderColor: '#111',
+    },
+    filterText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#666',
+    },
+    filterTextActive: {
+        color: '#fff',
+    },
+    body: {
+        flex: 1,
+        backgroundColor: '#FAFAFA',
+        borderTopLeftRadius: 30,
+        borderTopRightRadius: 30,
+        overflow: 'hidden',
+    },
     scrollContent: {
-        paddingHorizontal: 20,
-        paddingBottom: 100,
-        paddingTop: 10,
+        padding: 24,
     },
     section: {
-        marginBottom: 30,
+        marginBottom: 32,
+    },
+    sectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
     },
     sectionTitle: {
         fontSize: 18,
-        fontWeight: 'bold',
-        color: Colors.light.text,
-        marginBottom: Layout.spacing.md,
+        fontWeight: '700',
+        color: '#1F2937',
     },
-    chipContainer: {
+    clearText: {
+        fontSize: 13,
+        color: '#EF4444',
+        fontWeight: '600',
+    },
+    historyList: {
         flexDirection: 'row',
         flexWrap: 'wrap',
     },
-    chip: {
+    historyItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
         backgroundColor: '#fff',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 20,
-        marginRight: 10,
-        marginBottom: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        marginRight: 8,
+        marginBottom: 8,
         borderWidth: 1,
-        borderColor: '#eee',
+        borderColor: '#E5E7EB',
     },
-    chipText: {
-        color: '#555',
+    historyText: {
         fontSize: 14,
+        color: '#4B5563',
+        marginRight: 8,
     },
-    gridContainer: {
+    grid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'space-between',
+        marginTop: 10,
     },
-    gridItem: {
+    gridCard: {
         width: '48%',
         backgroundColor: '#fff',
-        borderRadius: Layout.radius.lg,
-        padding: 15,
-        marginBottom: Layout.spacing.md,
+        padding: 16,
+        borderRadius: 16,
+        marginBottom: 16,
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.06)',
         ...Layout.shadows.small,
     },
-    iconWrapper: {
-        width: 60,
-        height: 60,
-        marginBottom: 10,
+    iconCircle: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-    icon: {
-        width: '100%',
-        height: '100%',
-        resizeMode: 'contain',
+        marginBottom: 12,
     },
     gridLabel: {
-        fontSize: 16,
+        fontSize: 15,
         fontWeight: '600',
-        color: '#333',
+        color: '#111',
     },
     resultsList: {
-        paddingHorizontal: 20,
-        paddingBottom: 100,
+        padding: 20,
     },
-    resultItem: {
+    resultCard: {
         flexDirection: 'row',
-        alignItems: 'center',
-        padding: 12,
         backgroundColor: '#fff',
-        marginBottom: Layout.spacing.sm,
-        borderRadius: Layout.radius.lg,
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.06)',
+        padding: 12,
+        borderRadius: 16,
+        marginBottom: 12,
+        alignItems: 'center',
         ...Layout.shadows.small,
     },
-    resultImagePlaceholder: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
-        backgroundColor: '#E0F2FE',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
+    resultImage: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: '#F3F4F6',
     },
-    initial: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: Colors.light.primary,
-    },
-    resultInfo: {
+    resultContent: {
         flex: 1,
+        marginLeft: 12,
+    },
+    resultHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
     },
     resultName: {
         fontSize: 16,
         fontWeight: 'bold',
-        color: '#333',
+        color: '#111',
+        maxWidth: '90%',
+    },
+    onlineDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#10B981',
     },
     resultCategory: {
-        fontSize: 14,
-        color: '#666',
+        fontSize: 13,
+        color: '#6B7280',
         marginTop: 2,
     },
-    ratingRow: {
+    metaRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 4,
+        marginTop: 6,
+    },
+    ratingBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFBEB',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
     },
     ratingText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: 'bold',
-        marginLeft: 4,
-        color: '#333',
+        color: '#B45309',
+        marginLeft: 3,
     },
-    dot: {
-        marginHorizontal: 6,
-        color: '#ccc',
+    locationBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     distanceText: {
-        fontSize: 12,
-        color: '#999',
-        marginLeft: 4,
+        fontSize: 11,
+        color: '#6B7280',
+        marginLeft: 3,
     },
-    emptyContainer: {
-        alignItems: 'center',
-        marginTop: 50,
-    },
-    emptyText: {
-        color: '#999',
+    dot: {
         fontSize: 16,
-    }
+        color: '#D1D5DB',
+        marginHorizontal: 8,
+    },
+    priceText: {
+        fontSize: 11,
+        color: '#15803D', // Greenish for price
+        fontWeight: '600',
+    },
+    emptyState: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingTop: 60,
+    },
+    emptyTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#374151',
+        marginTop: 16,
+    },
+    emptySub: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        marginTop: 8,
+    },
 });

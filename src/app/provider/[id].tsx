@@ -1,3 +1,12 @@
+/**
+ * File: src/app/provider/[id].tsx
+ * Purpose: Detailed profile view for a specific Service Provider.
+ * Key Features:
+ * - "iFood-style" layout with Banner, Floating Avatar, and Sticky Scroll.
+ * - Displays provider metrics: Rating, Technical Visit Price, Warranty, Speed.
+ * - Lists "Destaques" (Highlight services) in a horizontal scroll.
+ * - Gatekeeper for contact info: Only shows WhatsApp after order acceptance.
+ */
 import { Button } from '@/components/ui/Button';
 import { Colors } from '@/constants/Colors';
 import { useRequest } from '@/context/RequestContext';
@@ -87,7 +96,7 @@ export default function ProviderDetailScreen() {
                     <View style={styles.bannerOverlay} />
 
                     {/* Navigation Icons */}
-                    <View style={[styles.navBar, { marginTop: insets.top }]}>
+                    <View style={[styles.navBar, { marginTop: insets.top - 40 }]}>
                         <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
                             <X size={24} color="#fff" />
                         </TouchableOpacity>
@@ -249,7 +258,6 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center', // Fix vertical alignment of icons
         paddingHorizontal: 16,
-        paddingTop: 10,
     },
     rightIcons: {
         flexDirection: 'row',
@@ -279,7 +287,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     avatarContainer: {
-        marginTop: -40, // Pull up to overlap banner
+        marginTop: -90, // Pull up to overlap banner
         width: 80,
         height: 80,
         borderRadius: 40,

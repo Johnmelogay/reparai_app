@@ -1,12 +1,23 @@
+/**
+ * File: src/app/request/new/match.tsx
+ * Purpose: The "Searching" screen where users wait for a provider.
+ * Key Features:
+ * - Displays a pulsing "Radar" animation to indicate searching.
+ * - Listens to `currentTicket` status to trigger "Match Found".
+ * - Shows the "Provider Found" bottom sheet with provider details.
+ * - Handles transitions to the active chat/order screen.
+ */
 import { Button } from '@/components/ui/Button';
-import { Colors } from '@/constants/Colors';
+import { Card } from '@/components/ui/Card';
+import { Colors, Layout } from '@/constants/Colors';
 import { BRANDED_MAP_STYLE } from '@/constants/MapStyles';
 import { useRequest } from '@/context/RequestContext';
+import { QUESTION_SETS } from '@/services/questionsData';
 import { supabase } from '@/services/supabase';
 import { useRouter } from 'expo-router';
 import { CheckCircle, MapPin } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, Easing, Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Dimensions, Easing, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 const { width, height } = Dimensions.get('window');
@@ -21,7 +32,20 @@ const INITIAL_REGION = {
 export default function RequestMatchScreen() {
     const router = useRouter();
     // Using global request state
-    const { status, setStatus, assignedProvider, setAssignedProvider, cancelRequest, eta, currentTicket } = useRequest();
+    const {
+        status,
+        setStatus,
+        assignedProvider,
+        setAssignedProvider,
+        cancelRequest,
+        eta,
+        currentTicket,
+        category,
+        funnelAnswers,
+        aiResult
+    } = useRequest();
+
+    const questionSet = QUESTION_SETS[category || 'electronics'] || QUESTION_SETS['electronics'];
 
     // Animations
     const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -29,23 +53,49 @@ export default function RequestMatchScreen() {
     const [statusText, setStatusText] = useState("Contatando profissionais próximos...");
 
     useEffect(() => {
-        // Pulse Animation active during NEW status
-        Animated.loop(
+        if (status === 'NEW' || status === 'OFFERED') {
+            const texts = [
+                "Analisando seu diagnóstico...",
+                `Buscando especialistas em ${category || 'serviços'}...`,
+                "Filtrando profissionais próximos...",
+                "Quase lá! Aguardando resposta..."
+            ];
+            let i = 0;
+            const interval = setInterval(() => {
+                i = (i + 1) % texts.length;
+                setStatusText(texts[i]);
+            }, 3500);
+            return () => clearInterval(interval);
+        }
+    }, [status, category]);
+
+    useEffect(() => {
+        // Pulse Animation active during NEW/OFFERED status
+        const animation = Animated.loop(
             Animated.sequence([
                 Animated.timing(pulseAnim, {
                     toValue: 1,
-                    duration: 1500,
+                    duration: 2000,
+                    easing: Easing.out(Easing.quad),
                     useNativeDriver: true,
-                    easing: Easing.out(Easing.ease),
                 }),
                 Animated.timing(pulseAnim, {
                     toValue: 0,
                     duration: 0,
                     useNativeDriver: true,
-                })
+                }),
             ])
-        ).start();
-    }, []);
+        );
+
+        if (status === 'NEW' || status === 'OFFERED') {
+            animation.start();
+        } else {
+            animation.stop();
+            pulseAnim.setValue(0);
+        }
+
+        return () => animation.stop();
+    }, [status]);
 
     useEffect(() => {
         if (currentTicket?.providerId && !assignedProvider) {
@@ -116,9 +166,20 @@ export default function RequestMatchScreen() {
                 userInterfaceStyle="light"
             >
                 {/* User Marker */}
-                <Marker coordinate={{ latitude: INITIAL_REGION.latitude, longitude: INITIAL_REGION.longitude }}>
+                <Marker
+                    coordinate={{
+                        latitude: currentTicket?.coordinates?.latitude || INITIAL_REGION.latitude,
+                        longitude: currentTicket?.coordinates?.longitude || INITIAL_REGION.longitude
+                    }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    zIndex={1000}
+                >
                     <View style={styles.userMarkerOut}>
-                        <View style={styles.userMarkerIn} />
+                        <Image
+                            source={require('../../../../assets/images/wavinghuman.png')}
+                            style={{ width: 52, height: 52 }}
+                            resizeMode="contain"
+                        />
                     </View>
                 </Marker>
 
@@ -129,6 +190,58 @@ export default function RequestMatchScreen() {
                     </Marker>
                 )}
             </MapView>
+
+            {/* Floating Summary Status (C9) */}
+            {status === 'NEW' && (
+                <View style={styles.floatingSummary}>
+                    <Card style={styles.statusCard} padding={0}>
+                        <View style={{ padding: 16 }}>
+                            <View style={styles.statusHeader}>
+                                <ActivityIndicator size="small" color={Colors.light.primary} />
+                                <Text style={styles.statusTitle}>{statusText}</Text>
+                            </View>
+                            <Text style={styles.statusSub}>Analisando {questionSet.questions.length} filtros e proximidade</Text>
+
+                            <View style={styles.miniDivider} />
+
+                            <Text style={styles.miniLabel}>Resumo da Solicitação:</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagScroll}>
+                                {Object.entries(funnelAnswers).map(([key, val]) => {
+                                    let label = val;
+                                    if (val === 'true') label = 'Sim';
+                                    if (val === 'false') label = 'Não';
+                                    if (val === 'unknown') label = 'Não sei';
+                                    return (
+                                        <View key={key} style={styles.tag}>
+                                            <Text style={styles.tagText}>{label}</Text>
+                                        </View>
+                                    );
+                                })}
+                            </ScrollView>
+
+                            {/* AI Summary Section */}
+                            {aiResult && aiResult.summary_for_provider && (
+                                <View style={{ marginTop: 16 }}>
+                                    <View style={styles.miniDivider} />
+                                    <Text style={styles.miniLabel}>Diagnóstico IA (Para Técnico):</Text>
+                                    <Text style={styles.aiSummaryText}>
+                                        "{aiResult.summary_for_provider}"
+                                    </Text>
+                                    {aiResult.tags && (
+                                        <View style={[styles.tagScroll, { marginTop: 8 }]}>
+                                            {aiResult.tags.map((tag: string, idx: number) => (
+                                                <View key={idx} style={[styles.tag, { backgroundColor: '#E0F2FE' }]}>
+                                                    <Text style={[styles.tagText, { color: '#0369A1' }]}>#{tag}</Text>
+                                                </View>
+                                            ))}
+                                        </View>
+                                    )}
+                                </View>
+                            )}
+                        </View>
+                    </Card>
+                </View>
+            )}
 
             {/* Searching Overlay */}
             {(status === 'NEW' || status === 'OFFERED') && (
@@ -204,14 +317,28 @@ export default function RequestMatchScreen() {
 
                     <View style={styles.actions}>
                         {status === 'ACCEPTED' && (
-                            <Button
-                                title="Pagar Taxa do Ticket (R$ 15,00)"
-                                onPress={() => {
-                                    // Navigate to payment
-                                    setStatus('PAID');
-                                }}
-                                style={{ backgroundColor: Colors.light.primary }}
-                            />
+                            <View style={{ gap: 12 }}>
+                                <View style={styles.feeInfo}>
+                                    <Text style={styles.feeLabel}>Taxa de deslocamento</Text>
+                                    <Text style={styles.feeValue}>R$ 15,00</Text>
+                                </View>
+                                <Button
+                                    title="Confirmar e Pagar"
+                                    onPress={() => {
+                                        setStatus('PAID');
+                                    }}
+                                    style={{ backgroundColor: Colors.light.primary }}
+                                />
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setAssignedProvider(null);
+                                        setStatus('NEW');
+                                    }}
+                                    style={styles.declineBtn}
+                                >
+                                    <Text style={styles.declineText}>Recusar este profissional</Text>
+                                </TouchableOpacity>
+                            </View>
                         )}
                         {(status === 'PAID' || status === 'EN_ROUTE') && (
                             <>
@@ -247,20 +374,21 @@ const styles = StyleSheet.create({
         backgroundColor: '#f2f2f2',
     },
     userMarkerOut: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: 'rgba(253, 123, 5, 0.3)',
         alignItems: 'center',
         justifyContent: 'center',
     },
     userMarkerIn: {
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        backgroundColor: Colors.light.primary,
-        borderWidth: 2,
-        borderColor: '#fff',
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#fff',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 4,
     },
     mapAvatar: {
         width: 40,
@@ -428,4 +556,103 @@ const styles = StyleSheet.create({
         color: Colors.light.textSecondary,
         fontWeight: '500',
     },
+    floatingSummary: {
+        position: 'absolute',
+        top: 60,
+        left: 20,
+        right: 20,
+        zIndex: 50,
+    },
+    statusCard: {
+        backgroundColor: 'rgba(255,255,255,0.95)',
+        borderRadius: 24,
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.05)',
+        ...Layout.shadows.medium,
+    },
+    statusHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 4,
+        gap: 8,
+    },
+    statusTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: Colors.light.text,
+    },
+    statusSub: {
+        fontSize: 12,
+        color: '#666',
+        marginBottom: 10,
+    },
+    miniDivider: {
+        height: 1,
+        backgroundColor: 'rgba(0,0,0,0.05)',
+        marginBottom: 10,
+    },
+    miniLabel: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#999',
+        textTransform: 'uppercase',
+        marginBottom: 6,
+    },
+    tagScroll: {
+        flexDirection: 'row',
+    },
+    tag: {
+        backgroundColor: '#F3F4F6',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+        marginRight: 8,
+    },
+    tagText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#555',
+    },
+    feeInfo: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 12,
+        backgroundColor: '#F9FAFB',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    feeLabel: {
+        fontSize: 14,
+        color: '#666',
+        fontWeight: '600',
+    },
+    feeValue: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: Colors.light.primary,
+    },
+    declineBtn: {
+        alignItems: 'center',
+        padding: 12,
+    },
+    declineText: {
+        color: '#999',
+        fontSize: 14,
+        fontWeight: '600',
+        textDecorationLine: 'underline',
+    },
+    aiSummaryText: {
+        fontSize: 14,
+        color: '#444',
+        lineHeight: 20,
+        fontStyle: 'italic',
+        marginTop: 4,
+        backgroundColor: 'rgba(0,0,0,0.02)',
+        padding: 8,
+        borderRadius: 8,
+        borderLeftWidth: 3,
+        borderLeftColor: Colors.light.primary,
+    }
 });

@@ -1,4 +1,5 @@
 import { Colors } from '@/constants/Colors';
+import { useRequest } from '@/context/RequestContext';
 import { REQUESTS } from '@/services/mockData';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, Send } from 'lucide-react-native';
@@ -25,6 +26,7 @@ const MOCK_MESSAGES = [
 export default function ChatRoomScreen() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
+    const { status, assignedProvider, eta } = useRequest();
     const [messages, setMessages] = useState<any[]>([]);
     const [inputText, setInputText] = useState('');
     const flatListRef = useRef<FlatList>(null);
@@ -105,6 +107,31 @@ export default function ChatRoomScreen() {
 
             <View style={styles.safetyBanner}>
                 <Text style={styles.safetyText}>🛡️ Monitorado por IA. Não envie senhas ou dados sensíveis.</Text>
+            </View>
+
+            <View style={styles.statusTimeline}>
+                {['Aceito', 'A caminho', 'Chegou', 'Finalizado'].map((step, index) => {
+                    const statusMap: Record<string, number> = {
+                        'ACCEPTED': 0, 'PAID': 0, 'EN_ROUTE': 1, 'ARRIVED': 2, 'IN_PROGRESS': 2, 'DONE': 3, 'COMPLETED': 3
+                    };
+                    const currentStepIndex = statusMap[status] ?? -1;
+                    const isActive = index === currentStepIndex;
+                    const isDone = index < currentStepIndex;
+                    return (
+                        <View key={step} style={styles.timelineItem}>
+                            <View style={[
+                                styles.timelineDot,
+                                isActive && styles.dotActive,
+                                isDone && styles.dotDone
+                            ]} />
+                            <Text style={[
+                                styles.timelineLabel,
+                                isActive && styles.labelActive,
+                                isDone && styles.labelDone
+                            ]}>{step}</Text>
+                        </View>
+                    );
+                })}
             </View>
 
             <FlatList
@@ -245,5 +272,50 @@ const styles = StyleSheet.create({
         backgroundColor: Colors.light.primary,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    statusTimeline: {
+        flexDirection: 'row',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        backgroundColor: '#fff',
+        borderBottomWidth: 1,
+        borderBottomColor: '#f0f0f0',
+        justifyContent: 'space-between',
+    },
+    timelineItem: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    timelineDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#E5E7EB',
+        marginBottom: 4,
+        borderWidth: 2,
+        borderColor: '#fff',
+    },
+    dotActive: {
+        backgroundColor: Colors.light.primary,
+        transform: [{ scale: 1.2 }],
+        shadowColor: Colors.light.primary,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 4,
+    },
+    dotDone: {
+        backgroundColor: Colors.light.success,
+    },
+    timelineLabel: {
+        fontSize: 10,
+        color: '#999',
+        fontWeight: '600',
+    },
+    labelActive: {
+        color: Colors.light.primary,
+        fontWeight: '800',
+    },
+    labelDone: {
+        color: '#333',
     }
 });

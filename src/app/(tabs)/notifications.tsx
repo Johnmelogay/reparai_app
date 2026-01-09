@@ -4,12 +4,47 @@ import React from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const NOTIFICATIONS = [
-    { id: '1', title: 'Pedido Aceito', body: 'João aceitou seu pedido de manutenção.', time: '2 min atrás', read: false },
-    { id: '2', title: 'Promoção', body: 'Ganhe 10% de desconto no próximo serviço!', time: '1h atrás', read: true },
-];
+import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
+import { useAuth } from '@/context/AuthContext';
+import { useState } from 'react';
+import { TouchableOpacity } from 'react-native';
+
+// TODO: Connect to Real Notification Service
+const NOTIFICATIONS: any[] = [];
 
 export default function NotificationsScreen() {
+    const { isGuest } = useAuth();
+    const [showAuth, setShowAuth] = useState(false);
+
+    if (isGuest) {
+        return (
+            <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 20 }]} edges={['top']}>
+                <View style={{ alignItems: 'center', marginBottom: 40 }}>
+                    <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+                        <Bell size={40} color="#9CA3AF" />
+                    </View>
+                    <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111', marginBottom: 10 }}>Notificações</Text>
+                    <Text style={{ textAlign: 'center', color: '#666', fontSize: 16, lineHeight: 24 }}>
+                        Faça login para receber atualizações sobre seus pedidos e promoções.
+                    </Text>
+                </View>
+
+                <TouchableOpacity
+                    style={{ backgroundColor: Colors.light.primary, paddingVertical: 16, paddingHorizontal: 32, borderRadius: 12, width: '100%', alignItems: 'center' }}
+                    onPress={() => setShowAuth(true)}
+                >
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Entrar</Text>
+                </TouchableOpacity>
+
+                <AuthBottomSheet
+                    visible={showAuth}
+                    onClose={() => setShowAuth(false)}
+                    onSuccess={() => setShowAuth(false)}
+                />
+            </SafeAreaView>
+        );
+    }
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <Text style={styles.title}>Notificações</Text>
@@ -17,6 +52,11 @@ export default function NotificationsScreen() {
                 data={NOTIFICATIONS}
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.listContent}
+                ListEmptyComponent={
+                    <View style={{ alignItems: 'center', marginTop: 50 }}>
+                        <Text style={{ color: '#999', fontSize: 16 }}>Nenhuma notificação nova.</Text>
+                    </View>
+                }
                 renderItem={({ item }) => (
                     <View style={[styles.item, !item.read && styles.unread]}>
                         <View style={styles.iconContainer}>

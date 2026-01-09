@@ -5,7 +5,6 @@ import { useRouter } from 'expo-router';
 import {
     ChevronRight,
     ClipboardList,
-    Home,
     Locate,
     Map,
     MapPin,
@@ -692,11 +691,10 @@ export default function HomeScreen() {
                                 <AnimatedUserMarker />
                             </Marker>
                         )}
-
                         {/* Service Location Marker - appears when address is confirmed */}
                         {selectedLocation && (
                             <Marker
-                                key={`${selectedLocation.latitude} -${selectedLocation.longitude} `}
+                                key={`${selectedLocation.latitude}-${selectedLocation.longitude}`}
                                 coordinate={{
                                     latitude: selectedLocation.latitude,
                                     longitude: selectedLocation.longitude,
@@ -707,11 +705,11 @@ export default function HomeScreen() {
                                 description={selectedLocation.address}
                             >
                                 <View style={styles.serviceLocationMarker}>
-                                    <View style={styles.servicePinOuter}>
-                                        <View style={styles.servicePinInner}>
-                                            <Home size={16} color="#FFFFFF" fill="#FFFFFF" />
-                                        </View>
-                                    </View>
+                                    <Image
+                                        source={require('../../../assets/images/wavinghuman.png')}
+                                        style={{ width: 64, height: 64 }}
+                                        resizeMode="contain"
+                                    />
                                 </View>
                             </Marker>
                         )}
@@ -721,6 +719,9 @@ export default function HomeScreen() {
                             const { image } = getCategoryPinMeta(provider?.category);
                             const ratingValue = provider?.rating;
                             const ratingText = typeof ratingValue === 'number' ? ratingValue.toFixed(1) : (ratingValue ? String(ratingValue) : '—');
+
+                            // Offline status logic (Red dot)
+                            const statusColor = isOnline ? Colors.light.success : '#EF4444';
 
                             return (
                                 <Marker
@@ -733,11 +734,12 @@ export default function HomeScreen() {
                                         {/* Floating 3D Icon - No Background Circle */}
                                         <Image
                                             source={image}
-                                            style={{ width: 50, height: 50 }}
+                                            style={{ width: 50, height: 50, opacity: isOnline ? 1 : 0.6 }} // Fade offline users slightly
                                             resizeMode="contain"
                                         />
 
-                                        {isOnline && <View style={styles.aestheticOnlineDot} />}
+                                        {/* Status Dot (Green or Red) */}
+                                        <View style={[styles.aestheticOnlineDot, { backgroundColor: statusColor }]} />
 
                                         <View style={styles.aestheticRatingPill}>
                                             <Star size={8} color="#F59E0B" fill="#F59E0B" />

@@ -1,12 +1,55 @@
 import { Colors } from '@/constants/Colors';
+import { useProfile } from '@/hooks/useProfile';
 import { useRouter } from 'expo-router';
 import { ArrowLeft } from 'lucide-react-native';
-import React from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function EditProfileScreen() {
     const router = useRouter();
+    const { profile, loading: profileLoading, updateProfile } = useProfile();
+
+    const [name, setName] = useState('');
+    const [phone, setPhone] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        if (profile) {
+            setName(profile.full_name || '');
+            setPhone(profile.phone || '');
+        }
+    }, [profile]);
+
+    const handleSave = async () => {
+        if (!name.trim()) {
+            Alert.alert('Erro', 'O nome não pode ficar vazio.');
+            return;
+        }
+
+        setSaving(true);
+        const { error } = await updateProfile({
+            full_name: name,
+            phone: phone
+        });
+        setSaving(false);
+
+        if (error) {
+            Alert.alert('Erro', 'Não foi possível atualizar o perfil.');
+        } else {
+            Alert.alert('Sucesso', 'Perfil atualizado com sucesso!', [
+                { text: 'OK', onPress: () => router.back() }
+            ]);
+        }
+    };
+
+    if (profileLoading) {
+        return (
+            <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+            </SafeAreaView>
+        );
+    }
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -21,21 +64,39 @@ export default function EditProfileScreen() {
             <View style={styles.content}>
                 <View style={styles.inputGroup}>
                     <Text style={styles.label}>Nome Completo</Text>
-                    <TextInput style={styles.input} defaultValue="João Silva" />
+                    <TextInput
+                        style={styles.input}
+                        value={name}
+                        onChangeText={setName}
+                        placeholder="Seu nome completo"
+                        editable={!saving}
+                    />
                 </View>
 
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Email</Text>
-                    <TextInput style={styles.input} defaultValue="joao.silva@email.com" keyboardType="email-address" />
-                </View>
+                {/* Email is typically immutable in many Auth setups or requires re-auth. Display only for now. */}
 
                 <View style={styles.inputGroup}>
                     <Text style={styles.label}>Telefone</Text>
-                    <TextInput style={styles.input} defaultValue="(69) 99312-9559" keyboardType="phone-pad" />
+                    <TextInput
+                        style={styles.input}
+                        value={phone}
+                        onChangeText={setPhone}
+                        keyboardType="phone-pad"
+                        placeholder="(DDD) 99999-9999"
+                        editable={!saving}
+                    />
                 </View>
 
-                <TouchableOpacity style={styles.saveButton} onPress={() => router.back()}>
-                    <Text style={styles.saveButtonText}>Salvar Alterações</Text>
+                <TouchableOpacity
+                    style={[styles.saveButton, saving && { opacity: 0.7 }]}
+                    onPress={handleSave}
+                    disabled={saving}
+                >
+                    {saving ? (
+                        <ActivityIndicator color="#fff" />
+                    ) : (
+                        <Text style={styles.saveButtonText}>Salvar Alterações</Text>
+                    )}
                 </TouchableOpacity>
             </View>
         </SafeAreaView>

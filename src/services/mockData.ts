@@ -36,50 +36,92 @@ import { Category, LedgerEntry, Provider, Ticket } from '@/types';
  */
 export const CATEGORIES: Category[] = [
     {
-        // ID único - use apenas letras, números e underscore
-        // Não use espaços ou caracteres especiais
-        id: 'electronics',
-
-        // Nome que aparece na tela para o usuário
-        name: 'Eletrônicos',
-
-        // Ícone: caminho para imagem na pasta assets/images/
-        // Para usar imagem local: require('../../assets/images/nome.png')
-        // Para usar URL: 'https://exemplo.com/imagem.png'
-        icon: require('../../assets/images/electric_plug.png'),
-
-        // Descrição curta que aparece abaixo do nome
-        description: 'Celulares, computadores e dispositivos',
-
-        // Tipos de serviço que essa categoria oferece:
-        // 'instant' = Reparo rápido (até 1h)
-        // 'evaluation' = Precisa avaliar primeiro
-        // 'workshop' = Levar para oficina
+        id: 'hvac',
+        name: 'Climatização',
+        icon: require('../../assets/images/snowflake.png'),
+        description: 'Ar-condicionado, limpeza e manutenção',
         tracks: ['instant', 'evaluation', 'workshop']
     },
     {
-        id: 'appliances',
-        name: 'Eletrodomésticos',
-        icon: require('../../assets/images/snowflake.png'),
-        description: 'Linha branca e cozinha',
-        // CORREÇÃO: estava 'ienstant' (erro de digitação), corrigido para 'instant'
+        id: 'plumbing',
+        name: 'Hidráulica',
+        icon: require('../../assets/images/plumber.png'),
+        description: 'Vazamentos, torneiras e encanamento',
         tracks: ['instant', 'evaluation', 'workshop']
     },
     {
         id: 'electrical',
-        name: 'Elétrica Residencial',
+        name: 'Elétrica',
         icon: require('../../assets/images/electric_plug.png'),
-        description: 'Instalações e reparos elétricos',
-        // Esta categoria não oferece serviço de oficina (workshop)
+        description: 'Fiação, tomadas, chuveiro e disjuntores',
         tracks: ['instant', 'evaluation']
     },
     {
-        id: 'agro',
-        name: 'Agro/Jardinagem',
-        icon: require('../../assets/images/plant.png'),
-        description: 'Ferramentas e máquinas (STIHL e similares)',
+        id: 'handyman',
+        name: 'Marido de Aluguel',
+        icon: require('../../assets/images/wrench_tool.png'),
+        description: 'Pequenos reparos, montagens e ajustes',
+        tracks: ['instant', 'evaluation']
+    },
+    {
+        id: 'electronics',
+        name: 'Eletrônicos',
+        icon: require('../../assets/images/electric_plug.png'), // Keeping same icon for now as no better alternative found yet
+        description: 'TV, celular, computadores e eletros',
         tracks: ['instant', 'evaluation', 'workshop']
     },
+    {
+        id: 'auto',
+        name: 'Auto / Mecânica',
+        icon: require('../../assets/images/car_tire_car_services.png'),
+        description: 'Bateria, pneus e socorro mecânico',
+        tracks: ['instant', 'evaluation', 'workshop']
+    }
+];
+
+/**
+ * DOMÍNIOS (3D TAXONOMY - LAYER 1)
+ * 
+ * Substituição moderna de "categorias" com modelo hierárquico.
+ * Domínios são os "corredores" principais que agrupam assets relacionados.
+ * 
+ * A IA vai determinar asset_type + service_type + issue_tags depois
+ * da interação com o usuário.
+ */
+export interface Domain {
+    id: string;
+    slug: string;
+    name: string;
+    icon: any; // require() or URL
+    description: string;
+    tracks: ('instant' | 'evaluation' | 'workshop')[];
+}
+
+export const DOMAINS: Domain[] = [
+    {
+        id: 'mobilidade',
+        slug: 'mobilidade',
+        name: 'Mobilidade',
+        icon: require('../../assets/images/car_tire_car_services.png'),
+        description: 'Veículos e transporte',
+        tracks: ['instant', 'evaluation', 'workshop']
+    },
+    {
+        id: 'casa',
+        slug: 'casa',
+        name: 'Casa',
+        icon: require('../../assets/images/wrench_tool.png'),
+        description: 'Residência e infraestrutura',
+        tracks: ['instant', 'evaluation', 'workshop']
+    },
+    {
+        id: 'tecnologia',
+        slug: 'tecnologia',
+        name: 'Tecnologia',
+        icon: require('../../assets/images/electric_plug.png'),
+        description: 'Eletrônicos e dispositivos',
+        tracks: ['instant', 'evaluation', 'workshop']
+    }
 ];
 
 /**
@@ -109,76 +151,31 @@ export const CATEGORIES: Category[] = [
  */
 export const NEARBY_PROVIDERS: Provider[] = [
     {
-        // ID único do profissional
         id: '1',
-
-        // Nome que aparece na tela
         name: 'Agromotores',
-
-        // Categoria principal (texto livre, pode ser diferente do ID)
         category: 'Agro/Jardinagem',
-
-        // IDs das categorias que ele atende (devem existir em CATEGORIES)
-        // Exemplo: ['agro', 'electronics'] = atende ambas
-        categories: ['agro'],
-
-        // Avaliação média (0.0 a 5.0)
+        categories: ['handyman'], // Mapped to Handyman for MVP
         rating: 4.8,
-
-        // Número total de avaliações
         reviews: 124,
-
-        // Endereço físico da empresa
         address: 'R. Alm. Barroso, 1528',
-
-        // Distância do usuário (calculada ou fixa)
-        // Formato: '5,6 km' ou '250 m'
         distance: '5,6 km',
-
-        // Status atual: 'online' (disponível) ou 'offline' (indisponível)
         status: 'online',
-
-        // Selos de qualidade:
-        // 'verified' = verificado pela plataforma
-        // 'professional' = profissional certificado
-        // 'featured' = destaque/premium
         badges: ['verified', 'professional', 'featured'],
-
-        // Coordenadas GPS (latitude, longitude)
-        // Porto Velho, RO: latitude ~-8.76, longitude ~-63.90
-        // Use Google Maps para encontrar coordenadas exatas
         coordinates: { latitude: -8.7619, longitude: -63.9039 },
-
-        // URL da imagem (pode ser Unsplash, Imgur, ou servidor próprio)
-        // Ou use require() para imagem local
         image: 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=800&q=80',
-
-        // Preço da visita técnica (formato brasileiro)
         visitPrice: '80,00',
-
-        // Pontuação operacional (0-100) - usado para ranking
         operationalScore: 95,
-
-        // Tempo médio de resposta em minutos
         responseTime: 12,
-
-        // Taxa de resposta em % (0-100)
         responseRate: 98,
-
-        // Taxa de conclusão em % (0-100)
         completionRate: 96,
-
-        // Taxa de cancelamento em % (0-100)
         cancellationRate: 2,
-
-        // Se é membro premium (aparece com destaque)
         isPremium: true,
     },
     {
         id: '2',
         name: 'HRB Refrigeração',
-        category: 'Eletrodomésticos',
-        categories: ['appliances'],
+        category: 'Climatização',
+        categories: ['hvac'],
         rating: 4.5,
         reviews: 42,
         address: 'Av. Jatuarana, 2100',
@@ -238,8 +235,8 @@ export const NEARBY_PROVIDERS: Provider[] = [
     {
         id: '5',
         name: 'Oficina do Zé',
-        category: 'Agro/Jardinagem',
-        categories: ['agro'],
+        category: 'Manutenção Geral',
+        categories: ['handyman'],
         rating: 4.9,
         reviews: 210,
         address: 'Av. Nações Unidas, 1200',
@@ -278,8 +275,8 @@ export const NEARBY_PROVIDERS: Provider[] = [
     {
         id: '7',
         name: 'Jardinagem Verde',
-        category: 'Agro/Jardinagem',
-        categories: ['agro'],
+        category: 'Jardinagem',
+        categories: ['handyman'],
         rating: 4.7,
         reviews: 55,
         address: 'Av. Calama, 3000',
@@ -298,8 +295,8 @@ export const NEARBY_PROVIDERS: Provider[] = [
     {
         id: '8',
         name: 'Refrigeração Polar',
-        category: 'Eletrodomésticos',
-        categories: ['appliances'],
+        category: 'Climatização',
+        categories: ['hvac'],
         rating: 4.6,
         reviews: 78,
         address: 'R. Duque de Caxias, 900',
@@ -341,7 +338,7 @@ export const MOCK_TICKETS: Ticket[] = [
     {
         id: 'ticket_101',
         userId: 'user_1',
-        category: 'agro',
+        category: 'handyman',
         track: 'instant',
         description: 'Motosserra não liga, precisa de manutenção urgente',
         status: 'EN_ROUTE',
@@ -359,7 +356,7 @@ export const MOCK_TICKETS: Ticket[] = [
     {
         id: 'ticket_102',
         userId: 'user_1',
-        category: 'appliances',
+        category: 'hvac',
         track: 'evaluation',
         description: 'Ar condicionado não está gelando, precisa de diagnóstico',
         status: 'DONE',
@@ -398,7 +395,7 @@ export const MOCK_LEDGER: LedgerEntry[] = [
         providerId: '2',
         providerName: 'HRB Refrigeração',
         service: 'Limpeza de Ar Condicionado',
-        category: 'appliances',
+        category: 'hvac',
         date: new Date(Date.now() - 86400000).toISOString(),
         price: 200.00,
         warranty: {
