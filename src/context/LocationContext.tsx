@@ -7,12 +7,13 @@
  * - Persists selected location to AsyncStorage for app restarts.
  * - formatting and reverse geocoding utilities.
  */
+import { supabase } from '@/services/supabase';
 import { getItem, saveItem, STORAGE_KEYS } from '@/utils/storage';
 import * as Location from 'expo-location';
 import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 import { Alert } from 'react-native';
 
-interface SavedAddress {
+export interface SavedAddress {
     id: string;
     name: string; // e.g., "Casa", "Trabalho"
     address: string;
@@ -36,13 +37,16 @@ interface LocationContextType {
         city?: string;
         state?: string;
     } | null; // User choice
-    address: string; // Display address (based on selectedLocation)
+    address: string; // Display address
     errorMsg: string | null;
     isLoading: boolean;
     refreshLocation: (updateServiceAddress?: boolean) => Promise<Location.LocationObject | null>;
-    selectLocation: (lat: number, long: number, addr?: string) => void;
+    selectLocation: (lat: number, long: number, addr?: string, components?: Partial<any>) => void;
     searchAddress: (query: string) => Promise<{ latitude: number, longitude: number, address: string }[]>;
     savedAddresses: SavedAddress[];
+    saveAddress: (address: Omit<SavedAddress, 'id'>) => Promise<void>;
+    deleteAddress: (id: string) => Promise<void>;
+    fetchSavedAddresses: () => Promise<void>;
 }
 
 const LocationContext = createContext<LocationContextType | undefined>(undefined);
@@ -61,12 +65,75 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     const [address, setAddress] = useState<string>('Localizando...');
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
 
-    // Mock Saved Addresses
-    const savedAddresses: SavedAddress[] = [
-        { id: '1', name: 'Casa', address: 'Av. Carlos Gomes, 1234', latitude: -8.76183, longitude: -63.90177, icon: 'Home' },
-        { id: '2', name: 'Trabalho', address: 'Rua da Beira, 500', latitude: -8.755, longitude: -63.89, icon: 'Briefcase' },
-    ];
+    const fetchSavedAddresses = async () => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const { data, error } = await supabase
+                .from('clients')
+                .select('saved_addresses')
+                .eq('id', user.id)
+                .single();
+
+            if (data?.saved_addresses) {
+                // Ensure it's an array and parse it if necessary (Supabase returns JSON object/array directly)
+                const addresses = Array.isArray(data.saved_addresses) ? data.saved_addresses : [];
+                setSavedAddresses(addresses);
+            }
+        } catch (err) {
+            console.error('Error fetching saved addresses:', err);
+        }
+    };
+
+    const saveAddress = async (newAddress: Omit<SavedAddress, 'id'>) => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) {
+                Alert.alert('Erro', 'Você precisa estar logado para salvar endereços.');
+                return;
+            }
+
+            const addressWithId = { ...newAddress, id: Math.random().toString(36).substring(7) };
+            const updatedAddresses = [...savedAddresses, addressWithId];
+
+            const { error } = await supabase
+                .from('clients')
+                .update({ saved_addresses: updatedAddresses })
+                .eq('id', user.id);
+
+            if (error) throw error;
+
+            setSavedAddresses(updatedAddresses);
+            Alert.alert('Sucesso', 'Endereço salvo com sucesso!');
+        } catch (err) {
+            console.error('Error saving address:', err);
+            Alert.alert('Erro', 'Não foi possível salvar o endereço.');
+        }
+    };
+
+    const deleteAddress = async (id: string) => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const updatedAddresses = savedAddresses.filter(addr => addr.id !== id);
+
+            const { error } = await supabase
+                .from('clients')
+                .update({ saved_addresses: updatedAddresses })
+                .eq('id', user.id);
+
+            if (error) throw error;
+
+            setSavedAddresses(updatedAddresses);
+        } catch (err) {
+            console.error('Error deleting address:', err);
+            Alert.alert('Erro', 'Não foi possível remover o endereço.');
+        }
+    };
 
     const selectLocation = (latitude: number, longitude: number, addr?: string, components?: Partial<typeof selectedLocation>) => {
         const newLoc = {
@@ -79,7 +146,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
         saveItem(STORAGE_KEYS.SELECTED_LOCATION, newLoc);
 
         if (addr) setAddress(addr);
-        else reverseGeocode(latitude, longitude); // Validation/Update address if not provided
+        else reverseGeocode(latitude, longitude);
     };
 
     const reverseGeocode = async (latitude: number, longitude: number) => {
@@ -209,6 +276,9 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
             }
             // Always get live GPS location on startup (don't update service address if we have one)
             refreshLocation(!savedLoc);
+
+            // Hydrate saved addresses
+            fetchSavedAddresses();
         };
 
         hydrate();
@@ -224,7 +294,10 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
             refreshLocation,
             selectLocation,
             searchAddress,
-            savedAddresses
+            savedAddresses,
+            saveAddress,
+            deleteAddress,
+            fetchSavedAddresses
         }}>
             {children}
         </LocationContext.Provider>

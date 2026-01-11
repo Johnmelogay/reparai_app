@@ -2,15 +2,18 @@
  * File: src/app/(tabs)/search.tsx
  * Purpose: Premium Global Search screen with Advanced Filtering & GIS Ranking.
  */
+import { GooglePlacesInput } from '@/components/GooglePlacesInput'; // New import
 import { FilterModal, FilterState } from '@/components/modals/FilterModal';
+import { MapPickerModal } from '@/components/modals/MapPickerModal';
 import { Colors, Layout } from '@/constants/Colors';
 import { useLocation } from '@/context/LocationContext'; // New: Location context
 import { useDebounce } from '@/hooks/useDebounce'; // New: Debounce hook
+import { useGooglePlaces } from '@/hooks/useGooglePlaces'; // New import
 import { usePartners } from '@/hooks/usePartners';
 import { useSearchHistory } from '@/hooks/useSearchHistory';
 import { formatDistance } from '@/utils/geo'; // New: GIS Utils
 import { useRouter } from 'expo-router';
-import { Clock, Filter, MapPin, Search, SlidersHorizontal, Star, X } from 'lucide-react-native';
+import { Clock, Filter, MapPin, SlidersHorizontal, Star, X } from 'lucide-react-native';
 import React, { useMemo, useState } from 'react';
 import {
     FlatList,
@@ -21,7 +24,6 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
     TouchableWithoutFeedback,
     UIManager,
@@ -46,22 +48,24 @@ const DOMAIN_MAPPING: Record<string, string[]> = {
     'tecnologia': ['electronics']
 };
 
-const FILTER_TYPES = ['Todos', 'Oficinas', 'Autônomos', 'Online'];
+const FILTER_TYPES = ['Disponíveis agora', 'Todos', 'Lojas'];
 
 export default function SearchScreen() {
     const router = useRouter();
     const { providers: allProviders, loading: loadingProviders } = usePartners();
     const { history, addToHistory, removeFromHistory, clearHistory } = useSearchHistory();
-    const { location, selectedLocation } = useLocation();
+    const { location, selectedLocation, selectLocation } = useLocation();
+    const { getPlaceDetails } = useGooglePlaces();
 
     // UI State
     const [query, setQuery] = useState('');
     const debouncedQuery = useDebounce(query, 300); // 300ms delay
     const [isFocused, setIsFocused] = useState(false);
     const [filterModalVisible, setFilterModalVisible] = useState(false);
+    const [isMapModalVisible, setIsMapModalVisible] = useState(false); // New: Map Modal State
 
     // Filter State
-    const [activeTypeFilter, setActiveTypeFilter] = useState('Todos');
+    const [activeTypeFilter, setActiveTypeFilter] = useState('Disponíveis agora');
     const [advancedFilters, setAdvancedFilters] = useState<FilterState>({
         sortBy: 'nearest',
         maxDistance: 20, // Default 20km
@@ -103,18 +107,35 @@ export default function SearchScreen() {
                 p.category.toLowerCase().includes(lowerQ) ||
                 matchesDomain;
 
-            // Type Filter
+            // Type Filter & Status Logic
             let matchesType = true;
-            if (activeTypeFilter === 'Oficinas') matchesType = p.address !== 'Prestador autônomo';
-            if (activeTypeFilter === 'Autônomos') matchesType = p.address === 'Prestador autônomo';
-            if (activeTypeFilter === 'Online') matchesType = p.status === 'online';
+            let isOnline = true; // Default assumption
+
+            switch (activeTypeFilter) {
+                case 'Disponíveis agora':
+                    // Must be Online
+                    matchesType = true;
+                    isOnline = p.status === 'online';
+                    break;
+                case 'Todos':
+                    // Show everyone (ignore status)
+                    matchesType = true;
+                    isOnline = true; // Bypass offline check
+                    break;
+                case 'Lojas':
+                    // Must be FIXED type (Workshops/Stores)
+                    // If 'type' is missing, fallback to address check
+                    matchesType = p.type === 'FIXED' || p.address === 'Oficina';
+                    // Should Lojas show offline stores? Usually yes (Catalog).
+                    isOnline = true;
+                    break;
+                default:
+                    matchesType = true;
+            }
 
             // Advanced Filters
             const matchesRating = !advancedFilters.minRating || (p.rating || 0) >= advancedFilters.minRating;
             const matchesDistance = p.calculatedDistance <= advancedFilters.maxDistance;
-
-            // Strict User Requirement: Offline providers must NOT appear in search results
-            const isOnline = p.status === 'online';
 
             return matchesText && matchesType && matchesRating && matchesDistance && isOnline;
         });
@@ -211,29 +232,41 @@ export default function SearchScreen() {
                         <Text style={styles.pageTitle}>Buscar</Text>
                     </View>
 
-                    {/* Search Input Row */}
-                    <View style={styles.searchContainer}>
-                        <View style={[styles.inputWrapper, isFocused && styles.inputWrapperFocused]}>
-                            <Search size={20} color={isFocused ? Colors.light.primary : '#9CA3AF'} />
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Profissional ou categoria..."
-                                placeholderTextColor="#9CA3AF"
-                                value={query}
-                                onChangeText={setQuery} // Updates immediately, useDebounce handles logic
-                                onFocus={() => setIsFocused(true)}
-                                onBlur={() => setIsFocused(false)}
-                                onSubmitEditing={handleSearchSubmit}
-                                returnKeyType="search"
-                            />
-                            {query.length > 0 && (
-                                <TouchableOpacity onPress={clearQuery}>
-                                    <View style={styles.clearBtn}>
-                                        <X size={12} color="#fff" />
-                                    </View>
-                                </TouchableOpacity>
-                            )}
-                        </View>
+                    {/* Search Input Row with Google Places Autocomplete */}
+                    <View style={[styles.searchContainer, { zIndex: 1000 }]}>
+                        <GooglePlacesInput
+                            value={query}
+                            onChangeText={setQuery}
+                            onSelect={async (placeId, text) => {
+                                setQuery(text);
+                                // Fetch details using the top-level hook instance
+                                const details = await getPlaceDetails(placeId);
+
+                                if (details) {
+                                    // Update location context if a place is selected
+                                    selectLocation(
+                                        details.location.latitude,
+                                        details.location.longitude,
+                                        details.formattedAddress
+                                    );
+                                    // Optionally filter providers by this new location?
+                                    // For now just setting the query and location is good.
+                                }
+                            }}
+                            placeholder="Profissional, categoria ou local..."
+                            onSubmitEditing={handleSearchSubmit}
+                            returnKeyType="search"
+                            containerStyle={{ flex: 1 }}
+                        />
+
+                        {/* Clear Button (Manual because GooglePlacesInput doesn't have it built-in yet) */}
+                        {query.length > 0 && (
+                            <TouchableOpacity onPress={clearQuery} style={{ position: 'absolute', right: 80, top: 16, zIndex: 1001 }}>
+                                <View style={styles.clearBtn}>
+                                    <X size={12} color="#fff" />
+                                </View>
+                            </TouchableOpacity>
+                        )}
 
                         {/* Filter Button */}
                         <TouchableOpacity
@@ -249,6 +282,19 @@ export default function SearchScreen() {
                             />
                         </TouchableOpacity>
                     </View>
+
+                    {/* Sub-Header: Address Picker (Clickable) */}
+                    <TouchableOpacity
+                        style={styles.addressPickerBtn}
+                        onPress={() => setIsMapModalVisible(true)}
+                        activeOpacity={0.8}
+                    >
+                        <MapPin size={14} color={Colors.light.primary} />
+                        <Text style={styles.addressPickerText} numberOfLines={1}>
+                            {selectedLocation?.address || 'Usar localização atual'}
+                        </Text>
+                        <Text style={styles.changeText}>Alterar</Text>
+                    </TouchableOpacity>
 
                     {/* Type Filters (Pills) */}
                     <View style={styles.filterRow}>
@@ -353,6 +399,17 @@ export default function SearchScreen() {
                         }}
                         currentFilters={advancedFilters}
                     />
+
+                    {/* Map Picker Modal */}
+                    <MapPickerModal
+                        visible={isMapModalVisible}
+                        onClose={() => setIsMapModalVisible(false)}
+                        onConfirm={(loc) => {
+                            // loc is { lat, lng, address, ... }
+                            selectLocation(loc.lat, loc.lng, loc.address);
+                            setIsMapModalVisible(false);
+                        }}
+                    />
                 </View>
             </TouchableWithoutFeedback>
         </SafeAreaView>
@@ -368,6 +425,23 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingTop: 10,
         paddingBottom: 5,
+    },
+    addressIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+        backgroundColor: '#F3F4F6',
+        alignSelf: 'flex-start',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+    },
+    addressText: {
+        fontSize: 12,
+        color: '#6B7280',
+        marginLeft: 4,
+        fontWeight: '500',
+        maxWidth: 250,
     },
     pageTitle: {
         fontSize: 28,
@@ -431,6 +505,32 @@ const styles = StyleSheet.create({
         marginBottom: 10,
         height: 40,
     },
+    // New Address Picker Styles
+    addressPickerBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: 20,
+        marginBottom: 15,
+        marginTop: -5,
+        backgroundColor: '#F9FAFB',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
+    },
+    addressPickerText: {
+        flex: 1,
+        fontSize: 13,
+        color: '#4B5563',
+        marginLeft: 8,
+        marginRight: 8,
+    },
+    changeText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: Colors.light.primary,
+    },
     filterChip: {
         paddingHorizontal: 16,
         paddingVertical: 8,
@@ -442,8 +542,8 @@ const styles = StyleSheet.create({
         height: 36,
     },
     filterChipActive: {
-        backgroundColor: '#111',
-        borderColor: '#111',
+        backgroundColor: Colors.light.primary,
+        borderColor: Colors.light.primary,
     },
     filterText: {
         fontSize: 13,

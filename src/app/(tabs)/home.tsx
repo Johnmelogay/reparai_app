@@ -14,6 +14,7 @@ import {
     Zap
 } from 'lucide-react-native';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Constants from 'expo-constants';
 import { Dimensions, FlatList, Image, Platform, Animated as RNAnimated, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -201,7 +202,7 @@ export default function HomeScreen() {
 
     console.log('🏠 Home: Providers recebidos:', nearbyProviders?.length);
 
-    const { location, selectedLocation, address: currentAddress, isLoading: isLoadingLocation, refreshLocation } = useLocation(); // [UPDATED]
+    const { location, selectedLocation, address: currentAddress, isLoading: isLoadingLocation, refreshLocation, selectLocation } = useLocation(); // [UPDATED]
     const mapRef = useRef<MapView>(null);
     const [refreshing, setRefreshing] = useState(false);
     const [showInlineOptions, setShowInlineOptions] = useState(false); // [NEW]
@@ -617,8 +618,8 @@ export default function HomeScreen() {
 
                 {/* ... rest of render ... */}
 
-                {/* Active Request Bar (Mini Player Style) */}
-                {(requestStatus === 'NEW' || requestStatus === 'OFFERED' || requestStatus === 'ACCEPTED' || requestStatus === 'PAID' || requestStatus === 'EN_ROUTE') && (
+                {/* Active Request Bar (Only when Searching/Finding) */}
+                {(requestStatus === 'NEW' || requestStatus === 'OFFERED') && (
                     <TouchableOpacity
                         style={styles.activeRequestBar}
                         onPress={() => router.push('/request/new/match')}
@@ -626,11 +627,7 @@ export default function HomeScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             <View style={styles.pulseDot} />
                             <Text style={styles.activeRequestText}>
-                                {requestStatus === 'NEW' ? 'Buscando profissional...' :
-                                    requestStatus === 'OFFERED' ? 'Aguardando resposta...' :
-                                        requestStatus === 'ACCEPTED' ? 'Aguardando pagamento...' :
-                                            requestStatus === 'PAID' ? 'Profissional a caminho' :
-                                                'Em andamento'}
+                                {requestStatus === 'NEW' ? 'Buscando profissional...' : 'Aguardando resposta...'}
                                 <Text style={{ fontWeight: 'normal', fontSize: 12 }}> • {requestCategory || 'Solicitação'}</Text>
                             </Text>
                         </View>
@@ -649,7 +646,7 @@ export default function HomeScreen() {
                             latitudeDelta: 0.05,
                             longitudeDelta: 0.05,
                         }}
-                        provider={PROVIDER_GOOGLE}
+                        provider={Platform.OS === 'android' || Platform.OS === 'ios' ? PROVIDER_GOOGLE : undefined}
                         scrollEnabled
                         zoomEnabled
                         rotateEnabled={true}
@@ -660,6 +657,8 @@ export default function HomeScreen() {
                         showsUserLocation={false}
                         showsMyLocationButton={false}
                         toolbarEnabled={false}
+                        onMapReady={() => console.log('🗺️ Home map ready')}
+                        onMapLoaded={() => console.log('🗺️ Home map loaded')}
                         onPanDrag={() => {
                             if (!showRecenterBtn) setShowRecenterBtn(true);
                         }}

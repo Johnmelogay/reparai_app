@@ -55,7 +55,7 @@ export interface ProviderSpecialization {
 }
 
 // ===== TICKET SYSTEM =====
-export type TicketStatus = 'NEW' | 'OFFERED' | 'ACCEPTED' | 'PAID' | 'EN_ROUTE' | 'DONE' | 'CANCELED';
+export type TicketStatus = 'NEW' | 'OFFERED' | 'ACCEPTED' | 'PAID' | 'EN_ROUTE' | 'DONE' | 'CANCELED' | 'declined' | 'finding' | 'answered' | 'expired';
 
 export type TicketTrack = 'instant' | 'evaluation' | 'workshop'; // Reparo Rápido, Precisa Avaliar, Levar para Oficina
 
@@ -157,6 +157,8 @@ export interface Provider {
     // Pricing
     visitPrice?: string; // Base visit price
     hourlyRate?: number; // Added to match usePartners usage
+    type?: string;
+
 
     // Contact (gatekeeping: only shown after ACCEPTED)
     phone?: string;
@@ -256,6 +258,19 @@ export interface User {
     averageRating: number;
 }
 
+export interface SavedAddress {
+    id: string;
+    name: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+    streetNumber?: string;
+    neighborhood?: string;
+    city?: string;
+    state?: string;
+    icon: 'Home' | 'Briefcase' | 'MapPin';
+}
+
 export interface UserAddress {
     id: string;
     label: string; // "Casa", "Trabalho", etc.
@@ -278,15 +293,17 @@ export interface PaymentMethod {
 }
 
 // ===== NOTIFICATION SYSTEM =====
+export type NotificationType = 'request' | 'message' | 'system' | 'partner';
+
 export interface Notification {
     id: string;
-    userId: string;
-    type: 'ticket_update' | 'offer_received' | 'payment_required' | 'warranty_expiring' | 'promotion';
+    user_id: string;
+    type: NotificationType;
     title: string;
-    body: string;
-    data?: any; // Additional data (ticketId, etc.)
-    read: boolean;
-    createdAt: string;
+    message: string;
+    related_id?: string;
+    is_read: boolean;
+    created_at: string;
 }
 
 // ===== FILTER SYSTEM =====
@@ -298,4 +315,3 @@ export interface ProviderFilters {
     minRating?: number;
     badges?: ProviderBadge[];
 }
-

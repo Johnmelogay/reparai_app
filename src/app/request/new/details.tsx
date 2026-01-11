@@ -1,15 +1,19 @@
+import { GooglePlacesInput } from '@/components/GooglePlacesInput';
+import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
 import { MapPickerModal } from '@/components/modals/MapPickerModal';
+import SavedAddressesList from '@/components/SavedAddressesList';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { GlassView } from '@/components/ui/GlassView';
 import { Colors, Layout } from '@/constants/Colors';
+import { useAuth } from '@/context/AuthContext';
 import { useLocation } from '@/context/LocationContext';
 import { useRequest } from '@/context/RequestContext';
-import { fetchAddressFromCEP, formatCEP, getSavedAddresses, SavedAddress } from '@/services/cepService';
-import { useRouter } from 'expo-router';
+import { useGooglePlaces } from '@/hooks/useGooglePlaces';
+import { fetchAddressFromCEP, formatCEP } from '@/services/cepService';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Check, ChevronRight, CreditCard, MapPin, User, X } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -31,9 +35,10 @@ export default function RequestDetailsScreen() {
         funnelAnswers,
         questionsHistory,
         aiResult,
-        finalConfidence
+        finalConfidence,
+        resetFunnel
     } = useRequest();
-    const { selectedLocation: liveLoc } = useLocation();
+    const { selectedLocation: liveLoc, saveAddress, selectLocation } = useLocation();
 
     // The current selection from the map or a previous draft
     // We prioritize liveLoc because it's what's currently "on the map"
@@ -57,16 +62,42 @@ export default function RequestDetailsScreen() {
     const [reference, setReference] = useState('');
     const [shouldSaveAddress, setShouldSaveAddress] = useState(false);
     const [addressLabel, setAddressLabel] = useState('🏠 Casa');
+    const [isManualEntryExpanded, setIsManualEntryExpanded] = useState(false);
 
-    // Saved addresses
-    const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
-    const [selectedSavedAddress, setSelectedSavedAddress] = useState<string | null>(null);
-    const [isLoggedIn, setIsLoggedIn] = useState(false); // TODO: Connect to Supabase Auth
+
 
     const [isUrgent, setIsUrgent] = useState(mode === 'instant');
     const [showConfirm, setShowConfirm] = useState(false);
     const [showMapPicker, setShowMapPicker] = useState(false);
     const [selectedMapAddress, setSelectedMapAddress] = useState<string | null>(null);
+
+    const { getPlaceDetails } = useGooglePlaces();
+
+    const applyLocationToDraft = (payload: {
+        lat: number;
+        lng: number;
+        address: string;
+        streetNumber?: string;
+        neighborhood?: string;
+        city?: string;
+        state?: string;
+    }) => {
+        selectLocation(payload.lat, payload.lng, payload.address, {
+            streetNumber: payload.streetNumber,
+            neighborhood: payload.neighborhood,
+            city: payload.city,
+            state: payload.state,
+        });
+
+        updateDraft(description, undefined, {
+            address: payload.address,
+            streetNumber: payload.streetNumber,
+            neighborhood: payload.neighborhood,
+            city: payload.city,
+            state: payload.state,
+            coordinates: { latitude: payload.lat, longitude: payload.lng },
+        });
+    };
 
     // Map selection handler
     const handleMapConfirm = (location: {
@@ -101,55 +132,107 @@ export default function RequestDetailsScreen() {
         }
 
         setReference('');
+
+        applyLocationToDraft({
+            lat: location.lat,
+            lng: location.lng,
+            address: location.address,
+            streetNumber: location.number || '',
+            neighborhood: location.neighborhood || '',
+            city: location.city || '',
+            state: location.state || '',
+        });
     };
 
-    // Load saved addresses (mock for now, will connect to Supabase Auth)
-    React.useEffect(() => {
-        // ... existing load
-    }, []);
+    const handleGooglePlaceSelect = async (placeId: string, primaryText: string) => {
+        const details = await getPlaceDetails(placeId);
+        if (details) {
+            const { formattedAddress, location, addressComponents } = details;
 
-    // ...
+            setSelectedMapAddress(formattedAddress);
+            setCepValidated(true);
 
-    {/* 2. ACTIONS ROW */ }
-    <View style={{ marginBottom: 20 }}>
-        <TouchableOpacity
-            style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                paddingVertical: 12,
-                paddingHorizontal: 16,
-                backgroundColor: selectedMapAddress ? Colors.light.primary : '#fff',
-                borderWidth: 1,
-                borderColor: Colors.light.primary,
-                borderRadius: 12,
-                borderStyle: selectedMapAddress ? 'solid' : 'dashed'
-            }}
-            onPress={() => setShowMapPicker(true)}
-        >
-            <MapPin size={20} color={selectedMapAddress ? '#fff' : Colors.light.primary} style={{ marginRight: 8 }} />
-            <Text style={{
-                color: selectedMapAddress ? '#fff' : Colors.light.primary,
-                fontWeight: '600',
-                fontSize: 15,
-                textAlign: 'center'
-            }} numberOfLines={1}>
-                {selectedMapAddress ? selectedMapAddress : 'Escolher local no mapa'}
-            </Text>
-            {selectedMapAddress && (
-                <View style={{ marginLeft: 8, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, padding: 4 }}>
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>ALTERAR</Text>
-                </View>
-            )}
-        </TouchableOpacity>
-    </View>
+            // 1. Try to use Google Address Components (Most accurate for the specific POI)
+            let foundComponents = false;
+            if (addressComponents) {
+                // Parse Google Components
+                // Schema: { longText, shortText, types: [] }
+                // types: 'street_number', 'route', 'sublocality', 'administrative_area_level_2' (City), 'administrative_area_level_1' (State)
 
-    // Load saved addresses (mock for now, will connect to Supabase Auth)
-    React.useEffect(() => {
-        if (isLoggedIn) {
-            getSavedAddresses().then(addresses => setSavedAddresses(addresses));
+                let st = '', num = '', neigh = '', city = '', state = '';
+
+                addressComponents.forEach(comp => {
+                    if (comp.types.includes('route')) st = comp.longText;
+                    if (comp.types.includes('street_number')) num = comp.longText;
+                    if (comp.types.includes('sublocality') || comp.types.includes('sublocality_level_1')) neigh = comp.longText;
+                    if (comp.types.includes('administrative_area_level_2')) city = comp.longText; // City
+                    if (comp.types.includes('administrative_area_level_1')) state = comp.shortText; // UF
+                });
+
+                if (st || city) {
+                    setAutoStreet(st);
+                    setStreetNumber(num);
+                    setAutoNeighborhood(neigh);
+                    setAutoCity(city);
+                    setAutoState(state);
+                    foundComponents = true;
+
+                    applyLocationToDraft({
+                        lat: location.latitude,
+                        lng: location.longitude,
+                        address: formattedAddress,
+                        streetNumber: num,
+                        neighborhood: neigh,
+                        city,
+                        state,
+                    });
+                }
+            }
+
+            // 2. Fallback to Nominatim Reverse Geocoding if Google didn't give structure
+            if (!foundComponents) {
+                setLoadingCEP(true); // Reuse loading indicator
+                try {
+                    const response = await fetch(
+                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}&zoom=18&addressdetails=1`,
+                        { headers: { 'User-Agent': 'RepairApp/1.0' } }
+                    );
+                    const data = await response.json();
+                    if (data && data.address) {
+                        const addr = data.address;
+                        const street = addr.road || addr.pedestrian || '';
+                        const neighborhood = addr.suburb || addr.neighbourhood || '';
+                        const city = addr.city || addr.town || '';
+                        const state = addr.state || '';
+                        const number = addr.house_number || '';
+
+                        setAutoStreet(street);
+                        setAutoNeighborhood(neighborhood);
+                        setAutoCity(city);
+                        setAutoState(state);
+                        setStreetNumber(number);
+
+                        applyLocationToDraft({
+                            lat: location.latitude,
+                            lng: location.longitude,
+                            address: formattedAddress,
+                            streetNumber: number,
+                            neighborhood,
+                            city,
+                            state,
+                        });
+                    }
+                } catch (err) {
+                    console.log('Error reverse geocoding', err);
+                } finally {
+                    setLoadingCEP(false);
+                }
+            }
         }
-    }, [isLoggedIn]);
+    };
+
+
+
 
     // CEP Auto-complete logic
     const handleCEPBlur = async () => {
@@ -178,20 +261,77 @@ export default function RequestDetailsScreen() {
 
     // Reactive update: when hydrated ticket or location data becomes available
     React.useEffect(() => {
+        // Sync with selected location (e.g. from Saved Addresses or Map)
+        if (activeLoc) {
+            // Apply structured data if available
+            if (activeLoc.streetNumber) setStreetNumber(activeLoc.streetNumber);
+            if (activeLoc.neighborhood) setAutoNeighborhood(activeLoc.neighborhood);
+            if (activeLoc.city) setAutoCity(activeLoc.city);
+            if (activeLoc.state) setAutoState(activeLoc.state);
+
+            // Try to parse street from address line if structured specific street missing
+            if (activeLoc.address) {
+                const parts = activeLoc.address.split(',');
+                if (parts.length > 0) {
+                    setAutoStreet(parts[0].trim());
+                }
+
+                // CRITICAL FIX: If structured number is missing, try to extract from address string
+                // Format usually: "Street, Number - Neighborhood"
+                if (!activeLoc.streetNumber && parts.length > 1) {
+                    const numberPart = parts[1].trim();
+                    // Grab the first sequence of digits
+                    const extractedNum = numberPart.match(/^\d+/);
+                    if (extractedNum) {
+                        setStreetNumber(extractedNum[0]);
+                    }
+                }
+            }
+
+            // Mark as validated since it came from a trusted source
+            setCepValidated(true);
+
+            // Auto-expand manual entry if street number is missing, urging user to fill it
+            if (!activeLoc.streetNumber) {
+                setIsManualEntryExpanded(true);
+            }
+        }
+
         if (ticket?.streetNumber && !streetNumber) setStreetNumber(ticket.streetNumber);
         if (ticket?.complement && !complement) setComplement(ticket.complement);
         if (ticket?.reference && !reference) setReference(ticket.reference);
-        if (globalDesc && !description) setDescription(globalDesc);
-    }, [ticket, globalDesc, activeLoc]);
+        if (ticket?.reference && !reference) setReference(ticket.reference);
+
+        // Auto-fill description from AI result if available and description is empty
+        if (!description) {
+            if (globalDesc) {
+                setDescription(globalDesc);
+            } else if (aiResult?.summary_for_provider) {
+                setDescription(aiResult.summary_for_provider);
+            } else if (aiResult?.problem_guess) {
+                setDescription(aiResult.problem_guess);
+            }
+        }
+    }, [ticket, globalDesc, activeLoc, aiResult]);
 
 
     // Auth and Gate State
-    const { isGuest } = useAuth();
+    // Auth and Gate State
+    const { isGuest, user } = useAuth();
     const [showAuthModal, setShowAuthModal] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    // Track why we are authentication: 'submit' = confirm & call, 'identify' = just show name
+    const [authAction, setAuthAction] = useState<'submit' | 'identify' | null>(null);
 
-    const handleNext = () => {
+    // DEBUG: Log Auth State
+    console.log('[Details] isGuest:', isGuest, 'User:', user?.email);
+
+    const handleNext = async () => {
         // Validation
-        if (!description.trim()) return;
+        if (!description.trim()) {
+            Alert.alert('Descrição obrigatória', 'Por favor, descreva o problema antes de continuar.');
+            return;
+        }
         if (!streetNumber.trim()) {
             Alert.alert('Número obrigatório', 'Por favor, informe o número do endereço.');
             return;
@@ -200,6 +340,21 @@ export default function RequestDetailsScreen() {
         if (!autoStreet && !autoCity) {
             Alert.alert('Endereço incompleto', 'Por favor, informe o endereço ou escolha no mapa.');
             return;
+        }
+
+        // Save Address Logic
+        if (shouldSaveAddress && liveLoc) {
+            await saveAddress({
+                name: addressLabel || 'Meu Local',
+                address: liveLoc.address,
+                latitude: liveLoc.latitude,
+                longitude: liveLoc.longitude,
+                streetNumber,
+                neighborhood: autoNeighborhood,
+                city: autoCity,
+                state: autoState,
+                icon: 'MapPin' // Default icon
+            });
         }
 
         // Sync local to global
@@ -228,32 +383,78 @@ export default function RequestDetailsScreen() {
 
     const proceedToMatch = () => {
         // Gate checking for 'instant' mode too
+        console.log('[Details] proceedToMatch called. isGuest:', isGuest);
         if (isGuest) {
-            setShowAuthModal(true);
+            console.log('[Details] Guest detected. Opening Auth Modal check.');
+            setShowConfirm(false);
+            setAuthAction('submit');
+            setTimeout(() => {
+                console.log('[Details] Opening Auth Modal NOW');
+                setShowAuthModal(true);
+            }, 400);
         } else {
+            console.log('[Details] User logged in. Submitting directly.');
             performSubmission();
         }
     };
 
-    const performSubmission = () => {
+    const handleUserRowPress = () => {
+        if (isGuest) {
+            setShowConfirm(false);
+            setAuthAction('identify');
+            setTimeout(() => {
+                setShowAuthModal(true);
+            }, 400);
+            return;
+        }
+        // If logged in, do nothing (keep sheet open), user just sees their name
+    };
+
+    const handleAddressRowPress = () => {
+        if (isGuest) {
+            setShowAuthModal(true);
+            return;
+        }
         setShowConfirm(false);
-        submitRequest(); // Global state -> searching
-        router.push({
-            pathname: '/request/new/match',
-        });
+        setIsManualEntryExpanded(true);
+    };
+
+    const performSubmission = async () => {
+        try {
+            setIsSubmitting(true);
+            await submitRequest(); // Global state -> searching
+            setShowConfirm(false);
+            router.push({
+                pathname: '/request/new/match',
+            });
+        } catch (error) {
+            console.error("Submission error", error);
+            // Optionally Alert here, but submitRequest usually swallows errors
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const handleAuthSuccess = () => {
         setShowAuthModal(false);
-        // Decide where to go based on mode
-        if (mode === 'instant') {
-            performSubmission();
-        } else {
-            submitRequest();
-            router.push({
-                pathname: '/request/new/select-provider',
-            });
-        }
+
+        setTimeout(() => {
+            if (authAction === 'submit') {
+                // Decide where to go based on mode
+                if (mode === 'instant') {
+                    performSubmission();
+                } else {
+                    submitRequest();
+                    router.push({
+                        pathname: '/request/new/select-provider',
+                    });
+                }
+            } else if (authAction === 'identify') {
+                setShowConfirm(true);
+            }
+            // If 'identify', do nothing more - user is back on the sheet with name visible
+            setAuthAction(null);
+        }, 450);
     };
 
 
@@ -415,284 +616,267 @@ export default function RequestDetailsScreen() {
                 <View style={{ width: 20 }} />
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-                {renderSummaryCard()}
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                keyboardVerticalOffset={0}
+            >
+                <ScrollView
+                    contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                >
+                    {renderSummaryCard()}
 
-                {/* Enhanced Apple-Style Address Form - ALWAYS VISIBLE */}
-                <Card style={[styles.card, { marginTop: 20 }]}>
-                    <Text style={styles.question}>Endereço de Atendimento</Text>
-
-                    {/* 1. SAVED ADDRESSES (DROPDOWN / ACCORDION) */}
-                    <View style={{ marginBottom: 20 }}>
-                        <TouchableOpacity
-                            style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                paddingVertical: 12,
-                                paddingHorizontal: 16,
-                                backgroundColor: '#F9F9F9',
-                                borderRadius: 12,
-                                borderWidth: 1,
-                                borderColor: '#E5E5EA',
-                            }}
-                            onPress={() => setIsSavedAddressesOpen(!isSavedAddressesOpen)}
-                        >
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <MapPin size={18} color={Colors.light.primary} style={{ marginRight: 10 }} />
-                                <Text style={{ fontSize: 15, color: '#333', fontWeight: '500' }}>
-                                    {selectedSavedAddress
-                                        ? savedAddresses.find(a => a.id === selectedSavedAddress)?.label || 'Endereço Salvo'
-                                        : 'Selecionar endereço salvo...'
-                                    }
-                                </Text>
-                            </View>
-                            <ChevronRight
-                                size={20}
-                                color="#999"
-                                style={{ transform: [{ rotate: isSavedAddressesOpen ? '90deg' : '0deg' }] }}
+                    {/* NEW DESCRIPTION INPUT (Only if AI result is missing) */}
+                    {!aiResult && (
+                        <Card style={[styles.card, { marginTop: 20 }]}>
+                            <Text style={styles.question}>O que precisa ser feito?</Text>
+                            <TextInput
+                                style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
+                                value={description}
+                                onChangeText={setDescription}
+                                placeholder="Descreva o problema (ex: Motor falhando, Pneu furado...)"
+                                multiline
                             />
-                        </TouchableOpacity>
+                        </Card>
+                    )}
 
-                        {isSavedAddressesOpen && (
-                            <View style={{
-                                marginTop: 8,
-                                backgroundColor: '#fff',
-                                borderRadius: 12,
-                                borderWidth: 1,
-                                borderColor: '#E5E5EA',
-                                overflow: 'hidden'
-                            }}>
-                                {savedAddresses.length > 0 ? (
-                                    savedAddresses.map((addr, index) => (
-                                        <TouchableOpacity
-                                            key={addr.id}
-                                            style={{
-                                                padding: 16,
-                                                borderBottomWidth: index === savedAddresses.length - 1 ? 0 : 1,
-                                                borderBottomColor: '#f0f0f0',
-                                                backgroundColor: selectedSavedAddress === addr.id ? 'rgba(52, 199, 89, 0.05)' : '#fff'
-                                            }}
-                                            onPress={() => {
-                                                setSelectedSavedAddress(addr.id);
-                                                setCep(addr.cep);
-                                                setAutoStreet(addr.street);
-                                                setStreetNumber(addr.number);
-                                                setComplement(addr.complement || '');
-                                                setAutoNeighborhood(addr.neighborhood);
-                                                setAutoCity(addr.city);
-                                                setAutoState(addr.state);
-                                                setReference(addr.reference || '');
-                                                setCepValidated(true);
-                                                setIsSavedAddressesOpen(false);
-                                            }}
-                                        >
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <View style={{ flex: 1 }}>
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                                                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>
-                                                            {addr.label}
-                                                        </Text>
-                                                        {addr.isDefault && (
-                                                            <View style={{ marginLeft: 8, backgroundColor: '#E5E5EA', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                                                                <Text style={{ fontSize: 10, color: '#666' }}>Padrão</Text>
-                                                            </View>
-                                                        )}
-                                                    </View>
-                                                    <Text style={{ fontSize: 13, color: '#666' }} numberOfLines={1}>
-                                                        {addr.street}, {addr.number} - {addr.neighborhood}
-                                                    </Text>
-                                                </View>
-                                                {selectedSavedAddress === addr.id && <Check size={18} color={Colors.light.primary} />}
-                                            </View>
-                                        </TouchableOpacity>
-                                    ))
-                                ) : (
-                                    <View style={{ padding: 20, alignItems: 'center' }}>
-                                        <Text style={{ color: '#999', fontSize: 14 }}>
-                                            Salve endereços para vê-los aqui.
+                    {/* Enhanced Apple-Style Address Form - ALWAYS VISIBLE */}
+                    <Card style={[styles.card, { marginTop: 20 }]}>
+                        <Text style={styles.question}>Endereço de Atendimento</Text>
+
+                        {/* 1. SAVED ADDRESSES (DROPDOWN / ACCORDION) */}
+                        {/* 1. SAVED ADDRESSES (Horizontal Scroll) */}
+                        <View style={{ marginBottom: 20 }}>
+                            <Text style={[styles.label, { marginBottom: 8 }]}>Seus Locais</Text>
+                            <SavedAddressesList
+                                onAddPress={() => {
+                                    setShouldSaveAddress(true);
+                                    setAddressLabel('Novo Local');
+                                }}
+                            />
+                        </View>
+
+                        {/* 2. ACTIONS ROW */}
+                        <View style={{ marginBottom: 20 }}>
+                            <TouchableOpacity
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    paddingVertical: 12,
+                                    backgroundColor: '#fff',
+                                    borderWidth: 1,
+                                    borderColor: Colors.light.primary,
+                                    borderRadius: 12,
+                                    borderStyle: 'dashed'
+                                }}
+                                onPress={() => setShowMapPicker(true)}
+                            >
+                                <MapPin size={20} color={Colors.light.primary} style={{ marginRight: 8 }} />
+                                <Text style={{ color: Colors.light.primary, fontWeight: '600', fontSize: 15 }}>
+                                    Escolher local no mapa
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={{ marginBottom: 20 }}>
+                            <Text style={[styles.label, { marginBottom: 8 }]}>Buscar Endereço</Text>
+                            <GooglePlacesInput
+                                onSelect={handleGooglePlaceSelect}
+                                placeholder="Digite rua, número, bairro..."
+                            />
+                        </View>
+
+                        <View style={{ marginBottom: 20 }}>
+                            <TouchableOpacity
+                                onPress={() => setIsManualEntryExpanded(!isManualEntryExpanded)}
+                                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+                            >
+                                <View style={{ flex: 1, height: 1, backgroundColor: '#E5E5EA' }} />
+                                <Text style={{ marginHorizontal: 10, color: '#999', fontSize: 12 }}>
+                                    OU PREENCHA MANUALMENTE {isManualEntryExpanded ? '▲' : '▼'}
+                                </Text>
+                                <View style={{ flex: 1, height: 1, backgroundColor: '#E5E5EA' }} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* 3. FORM INPUTS (Always Visible) */}
+                        <View style={{ gap: 12 }}>
+                            {isManualEntryExpanded && (
+                                <>
+                                    {/* CEP Helper - Optional */}
+                                    <View>
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                            <Text style={styles.label}>CEP (Opcional)</Text>
+                                            <TouchableOpacity onPress={() => Linking.openURL('https://buscacepinter.correios.com.br/app/endereco/index.php')}>
+                                                <Text style={{ fontSize: 12, color: Colors.light.primary, fontWeight: '500' }}>
+                                                    Não sei meu CEP ↗
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <TextInput
+                                                style={[styles.miniInput, { flex: 1, marginBottom: 0 }]}
+                                                value={cep}
+                                                onChangeText={(text) => {
+                                                    const formatted = formatCEP(text);
+                                                    setCep(formatted);
+                                                    if (formatted.replace(/\D/g, '').length === 8) {
+                                                        handleCEPBlur(); // Auto-trigger search
+                                                    }
+                                                    if (formatted.length < 9) setCepValidated(false);
+                                                }}
+                                                onBlur={handleCEPBlur}
+                                                placeholder="00000-000"
+                                                keyboardType="numeric"
+                                                maxLength={9}
+                                            />
+                                            {loadingCEP && <ActivityIndicator size="small" color={Colors.light.primary} style={{ marginLeft: 8 }} />}
+                                        </View>
+                                        <Text style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                                            Preencha para buscar endereço automaticamente
                                         </Text>
                                     </View>
-                                )}
-                            </View>
-                        )}
-                    </View>
 
-                    {/* 2. ACTIONS ROW */}
-                    <View style={{ marginBottom: 20 }}>
-                        <TouchableOpacity
-                            style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                paddingVertical: 12,
-                                backgroundColor: '#fff',
-                                borderWidth: 1,
-                                borderColor: Colors.light.primary,
-                                borderRadius: 12,
-                                borderStyle: 'dashed'
-                            }}
-                            onPress={() => setShowMapPicker(true)}
-                        >
-                            <MapPin size={20} color={Colors.light.primary} style={{ marginRight: 8 }} />
-                            <Text style={{ color: Colors.light.primary, fontWeight: '600', fontSize: 15 }}>
-                                Escolher local no mapa
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
+                                    <View>
+                                        <Text style={styles.label}>Logradouro</Text>
+                                        <TextInput
+                                            style={styles.miniInput}
+                                            value={autoStreet}
+                                            onChangeText={setAutoStreet}
+                                            placeholder="Rua, Avenida, etc"
+                                        />
+                                    </View>
 
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-                        <View style={{ flex: 1, height: 1, backgroundColor: '#E5E5EA' }} />
-                        <Text style={{ marginHorizontal: 10, color: '#999', fontSize: 12 }}>OU PREENCHA</Text>
-                        <View style={{ flex: 1, height: 1, backgroundColor: '#E5E5EA' }} />
-                    </View>
+                                    <View style={styles.formRow}>
+                                        <View style={{ flex: 1, marginRight: 10 }}>
+                                            <Text style={styles.label}>Número *</Text>
+                                            <TextInput
+                                                style={styles.miniInput}
+                                                value={streetNumber}
+                                                onChangeText={setStreetNumber}
+                                                placeholder="123"
+                                                keyboardType="numeric"
+                                            />
+                                        </View>
+                                        <View style={{ flex: 2 }}>
+                                            <Text style={styles.label}>Complemento</Text>
+                                            <TextInput
+                                                style={styles.miniInput}
+                                                value={complement}
+                                                onChangeText={setComplement}
+                                                placeholder="Apto 101"
+                                            />
+                                        </View>
+                                    </View>
 
-                    {/* 3. FORM INPUTS (Always Visible) */}
-                    <View style={{ gap: 12 }}>
-                        {/* CEP Helper - Optional */}
-                        <View>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                                <Text style={styles.label}>CEP (Opcional)</Text>
-                                <TouchableOpacity onPress={() => Linking.openURL('https://buscacepinter.correios.com.br/app/endereco/index.php')}>
-                                    <Text style={{ fontSize: 12, color: Colors.light.primary, fontWeight: '500' }}>
-                                        Não sei meu CEP ↗
-                                    </Text>
-                                </TouchableOpacity>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TextInput
-                                    style={[styles.miniInput, { flex: 1, marginBottom: 0 }]}
-                                    value={cep}
-                                    onChangeText={(text) => {
-                                        const formatted = formatCEP(text);
-                                        setCep(formatted);
-                                        if (formatted.replace(/\D/g, '').length === 8) {
-                                            handleCEPBlur(); // Auto-trigger search
-                                        }
-                                        if (formatted.length < 9) setCepValidated(false);
-                                    }}
-                                    onBlur={handleCEPBlur}
-                                    placeholder="00000-000"
-                                    keyboardType="numeric"
-                                    maxLength={9}
-                                />
-                                {loadingCEP && <ActivityIndicator size="small" color={Colors.light.primary} style={{ marginLeft: 8 }} />}
-                            </View>
-                            <Text style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
-                                Preencha para buscar endereço automaticamente
-                            </Text>
+                                    <View style={styles.formRow}>
+                                        <View style={{ flex: 3, marginRight: 10 }}>
+                                            <Text style={styles.label}>Bairro</Text>
+                                            <TextInput
+                                                style={styles.miniInput}
+                                                value={autoNeighborhood}
+                                                onChangeText={setAutoNeighborhood}
+                                                placeholder="Bairro"
+                                            />
+                                        </View>
+                                        <View style={{ flex: 2 }}>
+                                            <Text style={styles.label}>Cidade</Text>
+                                            <TextInput
+                                                style={styles.miniInput}
+                                                value={autoCity}
+                                                onChangeText={setAutoCity}
+                                                placeholder="Cidade"
+                                            />
+                                        </View>
+                                    </View>
+
+                                    <View>
+                                        <Text style={styles.label}>Ponto de Referência</Text>
+                                        <TextInput
+                                            style={styles.miniInput}
+                                            value={reference}
+                                            onChangeText={setReference}
+                                            placeholder="Ex: Próximo ao mercado XYZ"
+                                        />
+                                    </View>
+                                </>
+                            )}
+
+                            {/* SAVE LOCATION UI - Unified Flow */}
+                            {liveLoc && (
+                                <View style={{ marginTop: 16 }}>
+                                    {!shouldSaveAddress ? (
+                                        <TouchableOpacity
+                                            style={{
+                                                flexDirection: 'row',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                paddingVertical: 12,
+                                                backgroundColor: '#FFF7ED',
+                                                borderWidth: 1,
+                                                borderColor: Colors.light.primary,
+                                                borderRadius: 12,
+                                            }}
+                                            onPress={() => {
+                                                setShouldSaveAddress(true);
+                                                setAddressLabel('🏠 Casa');
+                                            }}
+                                        >
+                                            <MapPin size={20} color={Colors.light.primary} style={{ marginRight: 8 }} />
+                                            <Text style={{ color: Colors.light.primary, fontWeight: '600', fontSize: 15 }}>
+                                                Salvar este local para uso futuro
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ) : (
+                                        <View style={{
+                                            backgroundColor: '#f9f9fa',
+                                            padding: 12,
+                                            borderRadius: 12,
+                                            borderWidth: 1,
+                                            borderColor: '#E5E5EA'
+                                        }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <Check size={16} color={Colors.light.success} style={{ marginRight: 6 }} />
+                                                    <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.light.success }}>
+                                                        Salvando endereço
+                                                    </Text>
+                                                </View>
+                                                <TouchableOpacity onPress={() => setShouldSaveAddress(false)}>
+                                                    <Text style={{ fontSize: 12, color: '#999', textDecorationLine: 'underline' }}>
+                                                        Não salvar
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            </View>
+
+                                            <Text style={styles.label}>Nome do local</Text>
+                                            <TextInput
+                                                style={[styles.miniInput, { marginBottom: 0, backgroundColor: '#fff' }]}
+                                                value={addressLabel}
+                                                onChangeText={setAddressLabel}
+                                                placeholder="Ex: 🏠 Casa de Praia"
+                                            />
+                                        </View>
+                                    )}
+                                </View>
+                            )}
                         </View>
+                    </Card>
 
-                        <View>
-                            <Text style={styles.label}>Logradouro</Text>
-                            <TextInput
-                                style={styles.miniInput}
-                                value={autoStreet}
-                                onChangeText={setAutoStreet}
-                                placeholder="Rua, Avenida, etc"
-                            />
-                        </View>
+                    <View style={{ height: 40 }} />
+                </ScrollView>
 
-                        <View style={styles.formRow}>
-                            <View style={{ flex: 1, marginRight: 10 }}>
-                                <Text style={styles.label}>Número *</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    value={streetNumber}
-                                    onChangeText={setStreetNumber}
-                                    placeholder="123"
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                            <View style={{ flex: 2 }}>
-                                <Text style={styles.label}>Complemento</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    value={complement}
-                                    onChangeText={setComplement}
-                                    placeholder="Apto 101"
-                                />
-                            </View>
-                        </View>
-
-                        <View style={styles.formRow}>
-                            <View style={{ flex: 3, marginRight: 10 }}>
-                                <Text style={styles.label}>Bairro</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    value={autoNeighborhood}
-                                    onChangeText={setAutoNeighborhood}
-                                    placeholder="Bairro"
-                                />
-                            </View>
-                            <View style={{ flex: 2 }}>
-                                <Text style={styles.label}>Cidade</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    value={autoCity}
-                                    onChangeText={setAutoCity}
-                                    placeholder="Cidade"
-                                />
-                            </View>
-                        </View>
-
-                        <View>
-                            <Text style={styles.label}>Ponto de Referência</Text>
-                            <TextInput
-                                style={styles.miniInput}
-                                value={reference}
-                                onChangeText={setReference}
-                                placeholder="Ex: Próximo ao mercado XYZ"
-                            />
-                        </View>
-
-                        {/* SAVE CHECKBOX */}
-                        <TouchableOpacity
-                            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 5 }}
-                            onPress={() => setShouldSaveAddress(!shouldSaveAddress)}
-                        >
-                            <View style={{
-                                width: 20,
-                                height: 20,
-                                borderWidth: 2,
-                                borderColor: Colors.light.primary,
-                                borderRadius: 4,
-                                marginRight: 10,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                backgroundColor: shouldSaveAddress ? Colors.light.primary : '#fff'
-                            }}>
-                                {shouldSaveAddress && <Check size={14} color="#fff" />}
-                            </View>
-                            <Text style={{ fontSize: 14, color: '#666' }}>
-                                Salvar este endereço
-                            </Text>
-                        </TouchableOpacity>
-
-                        {shouldSaveAddress && (
-                            <View style={{ marginTop: 8 }}>
-                                <Text style={styles.label}>Nome do local</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    value={addressLabel}
-                                    onChangeText={setAddressLabel}
-                                    placeholder="Ex: 🏠 Casa de Praia"
-                                />
-                            </View>
-                        )}
-                    </View>
-                </Card>
-
-                <View style={{ height: 40 }} />
-            </ScrollView>
-
-            <View style={styles.footer}>
-                <Button
-                    title={mode === 'instant' ? "Chamar Agora" : mode === 'workshop' ? "Agendar Visita" : "Publicar Pedido"}
-                    onPress={handleNext}
-                    disabled={mode !== 'workshop' && !description}
-                />
-            </View>
+                <View style={styles.footer}>
+                    <Button
+                        title={mode === 'instant' ? "Chamar Agora" : mode === 'workshop' ? "Agendar Visita" : "Publicar Pedido"}
+                        onPress={handleNext}
+                    // disabled={mode !== 'workshop' && !description} // Enabled for better UX feedback
+                    />
+                </View>
+            </KeyboardAvoidingView>
 
             {/* Confirmation Sheet Overlay */}
             <Modal
@@ -708,7 +892,7 @@ export default function RequestDetailsScreen() {
                         activeOpacity={1}
                     />
 
-                    <GlassView intensity={40} style={styles.confirmSheet}>
+                    <View style={styles.confirmSheet}>
                         <View style={styles.sheetHandle} />
                         <View style={styles.sheetHeader}>
                             <Text style={styles.sheetTitle}>Confirmar Detalhes</Text>
@@ -719,18 +903,20 @@ export default function RequestDetailsScreen() {
 
                         <Text style={styles.sheetSub}>Confirme seus dados para agilizar o atendimento.</Text>
 
-                        <View style={styles.infoRow}>
+                        <TouchableOpacity style={styles.infoRow} onPress={handleUserRowPress} activeOpacity={0.7}>
                             <View style={styles.iconCircle}>
                                 <User size={20} color={Colors.light.primary} />
                             </View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>Solicitante</Text>
-                                <Text style={styles.infoValue}>João Melo</Text>
+                                <Text style={styles.infoValue}>
+                                    {isGuest ? 'Entrar ou criar conta' : (user?.user_metadata?.full_name || user?.email || 'Usuário')}
+                                </Text>
                             </View>
                             <ChevronRight size={20} color="#ccc" />
-                        </View>
+                        </TouchableOpacity>
 
-                        <View style={styles.infoRow}>
+                        <TouchableOpacity style={styles.infoRow} onPress={handleAddressRowPress} activeOpacity={0.7}>
                             <View style={styles.iconCircle}>
                                 <MapPin size={20} color={Colors.light.primary} />
                             </View>
@@ -744,7 +930,7 @@ export default function RequestDetailsScreen() {
                                 </Text>
                             </View>
                             <ChevronRight size={20} color="#ccc" />
-                        </View>
+                        </TouchableOpacity>
 
                         <View style={styles.infoRow}>
                             <View style={styles.iconCircle}>
@@ -760,9 +946,10 @@ export default function RequestDetailsScreen() {
                         <Button
                             title="Confirmar e Chamar"
                             onPress={proceedToMatch}
+                            loading={isSubmitting}
                             style={{ marginTop: 20, backgroundColor: Colors.light.success }}
                         />
-                    </GlassView>
+                    </View>
                 </View>
             </Modal>
 

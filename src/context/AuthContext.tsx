@@ -1,7 +1,5 @@
 import { supabase } from '@/services/supabase';
 import { Session, User } from '@supabase/supabase-js';
-import { makeRedirectUri } from 'expo-auth-session';
-import * as QueryParams from 'expo-auth-session/build/QueryParams';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import React, { createContext, useContext, useEffect, useState } from 'react';
@@ -22,10 +20,26 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
+let makeRedirectUriFn: ((options: any) => string) | null = null;
+let QueryParams: { getQueryParams: (url: string) => { params: Record<string, string> } } | null = null;
+
+try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const authSession = require('expo-auth-session');
+    makeRedirectUriFn = authSession.makeRedirectUri;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    QueryParams = require('expo-auth-session/build/QueryParams');
+} catch (error) {
+    console.warn('[Auth] expo-auth-session unavailable; OAuth disabled until dev client includes expo-crypto.');
+}
+
 // Helper to get redirect URL
 const getRedirectUrl = () => {
+    if (!makeRedirectUriFn) {
+        return Linking.createURL('auth/callback', { scheme: 'reparaimvp' });
+    }
     // preferLocalhost: false is CRITICAL for physical devices to avoid "Safari can't connect to localhost"
-    const redirectUrl = makeRedirectUri({
+    const redirectUrl = makeRedirectUriFn({
         scheme: 'reparaimvp',
         path: 'auth/callback',
         preferLocalhost: false,
@@ -72,6 +86,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const performOAuth = async (provider: 'google' | 'apple') => {
         try {
+            if (!QueryParams || !makeRedirectUriFn) {
+                return { error: new Error('Auth session not available. Rebuild dev client with expo-crypto.') };
+            }
             const redirectUrl = getRedirectUrl();
 
 

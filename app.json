@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "reparai-mvp",
+    "owner": "nomeconceitual",
     "slug": "reparai-mvp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,6 +12,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.reparai.mvp",
+      "config": {
+        "googleMapsApiKey": "${EXPO_PUBLIC_GOOGLE_MAPS_IOS_KEY}"
+      },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Precisamos de sua localização para encontrar prestadores próximos e definir o local do serviço.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Precisamos de sua localização para acompanhar o prestador em tempo real.",
@@ -22,6 +26,11 @@
     },
     "android": {
       "package": "com.reparai.mvp",
+      "config": {
+        "googleMaps": {
+          "apiKey": "${EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY}"
+        }
+      },
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -42,6 +51,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withGoogleMaps.js",
       [
         "expo-splash-screen",
         {
@@ -60,6 +70,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "87d11a6b-a341-49ef-99e8-a294a6e92871"
+      }
     }
   }
 }

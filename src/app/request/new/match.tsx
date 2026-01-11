@@ -12,13 +12,16 @@ import { Card } from '@/components/ui/Card';
 import { Colors, Layout } from '@/constants/Colors';
 import { BRANDED_MAP_STYLE } from '@/constants/MapStyles';
 import { useRequest } from '@/context/RequestContext';
+import { usePartners } from '@/hooks/usePartners';
 import { QUESTION_SETS } from '@/services/questionsData';
 import { supabase } from '@/services/supabase';
 import { useRouter } from 'expo-router';
 import { CheckCircle, MapPin } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Dimensions, Easing, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Constants from 'expo-constants';
+import { ActivityIndicator, Alert, Animated, Dimensions, Easing, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { Provider } from '@/types';
 
 const { width, height } = Dimensions.get('window');
 
@@ -42,10 +45,91 @@ export default function RequestMatchScreen() {
         currentTicket,
         category,
         funnelAnswers,
-        aiResult
+        aiResult,
+        offers
     } = useRequest();
 
+    const { providers } = usePartners();
+    const [offerCandidates, setOfferCandidates] = useState<Array<{ offerId: string; provider: Provider }>>([]);
+    const [isLoadingOffers, setIsLoadingOffers] = useState(false);
+
+    // Filter relevant providers for visual radar
+    const nearbyProviders = providers.filter(p => {
+        // Show all if category is generic or matches
+        if (!category) return true;
+
+        // Map UI categories to DB categories
+        // 'mecanica' -> 'auto', 'electronics' -> 'tech', etc if needed
+        const normalizedRequestCat = category.toLowerCase() === 'mecanica' ? 'auto' : category.toLowerCase();
+
+        const pCat = p.category?.toLowerCase() || '';
+        const pCats = p.categories?.map(c => c.toLowerCase()) || [];
+
+        return pCat.includes(normalizedRequestCat) ||
+            pCats.some(c => c.includes(normalizedRequestCat)) ||
+            // Fallback: If request is 'agro' or 'mecanica', show 'auto' too
+            (normalizedRequestCat === 'auto' && pCat.includes('mecanica')) ||
+            (normalizedRequestCat === 'mecanica' && pCat.includes('auto'));
+    });
+
+    // If no specific match, show ALL nearby to avoid empty map (Demo Fallback)
+    const visibleProviders = nearbyProviders.length > 0 ? nearbyProviders : providers;
+
+    // Limit for performance
+    const renderProviders = visibleProviders.slice(0, 10);
+
     const questionSet = QUESTION_SETS[category || 'electronics'] || QUESTION_SETS['electronics'];
+
+    const mapPartnerToProvider = (partner: any): Provider => ({
+        id: partner.id,
+        name: partner.full_name || 'Prestador',
+        image: partner.avatar_url || 'https://via.placeholder.com/150',
+        rating: partner.rating || 5.0,
+        reviews: partner.reviews_count || 0,
+        category: partner.service_category || 'Geral',
+        categories: partner.categories ? partner.categories : [partner.service_category].filter(Boolean),
+        hourlyRate: partner.hourly_rate || 100,
+        distance: partner.dist_km ? `${partner.dist_km.toFixed(1)}km` : '...',
+        coordinates: {
+            latitude: Number(partner.lat) || 0,
+            longitude: Number(partner.long) || 0,
+        },
+        status: partner.is_online ? 'online' : 'offline',
+        badges: [],
+        address: partner.address_label || 'Prestador',
+        visitPrice: partner.base_fee ? `${partner.base_fee}` : undefined,
+        operationalScore: partner.operational_score || 100,
+    });
+
+    const parseDistanceKm = (provider: Provider) => {
+        if (typeof provider.rawDistance === 'number' && !isNaN(provider.rawDistance)) {
+            return provider.rawDistance;
+        }
+        if (provider.distance) {
+            const normalized = provider.distance.replace(',', '.').toLowerCase();
+            const kmMatch = normalized.match(/([\d.]+)\s*km/);
+            if (kmMatch) return parseFloat(kmMatch[1]);
+            const mMatch = normalized.match(/([\d.]+)\s*m/);
+            if (mMatch) return parseFloat(mMatch[1]) / 1000;
+        }
+        return null;
+    };
+
+    const estimateDisplacementFee = (provider: Provider) => {
+        const baseFee = 12;
+        const perKm = 3.5;
+        const km = parseDistanceKm(provider);
+        const fee = km != null ? baseFee + km * perKm : 18;
+        return Math.max(baseFee, Math.round(fee * 2) / 2);
+    };
+
+    const formatBRL = (value: number) => `R$ ${value.toFixed(2).replace('.', ',')}`;
+
+    const resolveCompletedJobs = (provider: Provider) => {
+        if (provider.reviews && provider.reviews > 0) return provider.reviews;
+        if (provider.operationalScore) return Math.max(12, Math.round(provider.operationalScore * 2));
+        return 24;
+    };
 
     // Animations
     const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -53,7 +137,7 @@ export default function RequestMatchScreen() {
     const [statusText, setStatusText] = useState("Contatando profissionais próximos...");
 
     useEffect(() => {
-        if (status === 'NEW' || status === 'OFFERED') {
+        if (status === 'finding' || status === 'NEW' || status === 'OFFERED') {
             const texts = [
                 "Analisando seu diagnóstico...",
                 `Buscando especialistas em ${category || 'serviços'}...`,
@@ -68,6 +152,78 @@ export default function RequestMatchScreen() {
             return () => clearInterval(interval);
         }
     }, [status, category]);
+
+    useEffect(() => {
+        if (!currentTicket?.id) return;
+        let isMounted = true;
+        const loadOffers = async () => {
+            setIsLoadingOffers(true);
+            const { data: offersData, error } = await supabase
+                .from('provider_offers')
+                .select('id, status, provider_id')
+                .eq('request_id', currentTicket.id)
+                .in('status', ['answered']);
+
+            if (error) {
+                console.error('Error loading offers', error);
+                setIsLoadingOffers(false);
+                return;
+            }
+
+            const providerIds = Array.from(new Set((offersData || []).map(o => o.provider_id).filter(Boolean)));
+            if (providerIds.length === 0) {
+                if (isMounted) setOfferCandidates([]);
+                setIsLoadingOffers(false);
+                return;
+            }
+
+            const { data: partners, error: partnersError } = await supabase
+                .from('partners')
+                .select('id, full_name, avatar_url, rating, reviews_count, service_category, categories, hourly_rate, base_fee, lat, long, is_online, operational_score, dist_km, address_label')
+                .in('id', providerIds);
+
+            if (partnersError) {
+                console.error('Error loading partners', partnersError);
+                setIsLoadingOffers(false);
+                return;
+            }
+
+            const partnerMap = new Map((partners || []).map((p: any) => [p.id, mapPartnerToProvider(p)]));
+            const mapped = (offersData || [])
+                .map(o => {
+                    const provider = partnerMap.get(o.provider_id);
+                    if (!provider) return null;
+                    return { offerId: o.id, provider };
+                })
+                .filter(Boolean) as Array<{ offerId: string; provider: Provider }>;
+
+            if (isMounted) setOfferCandidates(mapped);
+            setIsLoadingOffers(false);
+        };
+
+        loadOffers();
+
+        const channel = supabase
+            .channel(`request_offers_${currentTicket.id}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'provider_offers',
+                    filter: `request_id=eq.${currentTicket.id}`,
+                },
+                () => {
+                    loadOffers();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            isMounted = false;
+            supabase.removeChannel(channel);
+        };
+    }, [currentTicket?.id]);
 
     useEffect(() => {
         // Pulse Animation active during NEW/OFFERED status
@@ -87,7 +243,7 @@ export default function RequestMatchScreen() {
             ])
         );
 
-        if (status === 'NEW' || status === 'OFFERED') {
+        if (status === 'finding' || status === 'NEW' || status === 'OFFERED') {
             animation.start();
         } else {
             animation.stop();
@@ -133,16 +289,42 @@ export default function RequestMatchScreen() {
     }, [currentTicket?.providerId, assignedProvider]);
 
     useEffect(() => {
-        if ((status === 'ACCEPTED' || status === 'PAID' || status === 'EN_ROUTE') && assignedProvider) {
-            // Slide up card
+        const shouldShowSheet =
+            (status === 'answered' && !assignedProvider) ||
+            ((status === 'ACCEPTED' || status === 'PAID' || status === 'EN_ROUTE') && assignedProvider);
+
+        if (shouldShowSheet) {
             Animated.spring(cardSlideAnim, {
                 toValue: 0,
                 friction: 8,
                 tension: 40,
                 useNativeDriver: true,
             }).start();
+        } else {
+            cardSlideAnim.setValue(height);
         }
-    }, [status, assignedProvider]);
+    }, [status, assignedProvider, cardSlideAnim]);
+
+    // Handle Declined/Cancelled State
+    useEffect(() => {
+        if (status === 'CANCELED' || status === 'declined' || status === 'expired') {
+            Alert.alert(
+                'Solicitação Encerrada',
+                'Não conseguimos encontrar um profissional disponível ou a solicitação foi cancelada.',
+                [
+                    {
+                        text: 'Tentar Novamente',
+                        onPress: () => router.back() // Go back to details to resubmit
+                    },
+                    {
+                        text: 'Ir para Início',
+                        style: 'cancel',
+                        onPress: () => router.push('/(tabs)/home')
+                    }
+                ]
+            );
+        }
+    }, [status]);
 
     const handleOpenChat = () => {
         if (assignedProvider) {
@@ -155,44 +337,107 @@ export default function RequestMatchScreen() {
         router.push('/(tabs)/home');
     };
 
+    const handleAcceptProvider = async (provider: Provider, offerId?: string | null) => {
+        if (!currentTicket?.id) return;
+
+        const { error: rpcError } = await supabase.rpc('choose_provider', {
+            request_id: currentTicket.id,
+            provider_id: provider.id
+        });
+
+        if (rpcError) {
+            console.error('choose_provider failed', rpcError);
+            Alert.alert('Erro', rpcError.message || 'Não foi possível confirmar o profissional.');
+            return;
+        }
+
+        setAssignedProvider(provider);
+        setStatus('ACCEPTED');
+    };
+
+    const offerCards = status === 'answered'
+        ? offerCandidates.map(o => ({ ...o, offerId: o.offerId }))
+        : offers.length > 0
+            ? offers.map(o => ({ offerId: null, provider: o.provider }))
+            : renderProviders.map(p => ({ offerId: null, provider: p }));
+
     return (
         <View style={styles.container}>
             {/* Background Map */}
             <MapView
                 style={StyleSheet.absoluteFill}
-                provider={PROVIDER_GOOGLE}
+                provider={Platform.OS === 'android' || Platform.OS === 'ios' ? PROVIDER_GOOGLE : undefined}
                 customMapStyle={BRANDED_MAP_STYLE}
                 initialRegion={INITIAL_REGION}
                 userInterfaceStyle="light"
+                onMapReady={() => console.log('🗺️ Match map ready')}
+                onMapLoaded={() => console.log('🗺️ Match map loaded')}
             >
                 {/* User Marker */}
-                <Marker
-                    coordinate={{
-                        latitude: currentTicket?.coordinates?.latitude || INITIAL_REGION.latitude,
-                        longitude: currentTicket?.coordinates?.longitude || INITIAL_REGION.longitude
-                    }}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    zIndex={1000}
-                >
-                    <View style={styles.userMarkerOut}>
-                        <Image
-                            source={require('../../../../assets/images/wavinghuman.png')}
-                            style={{ width: 52, height: 52 }}
-                            resizeMode="contain"
-                        />
-                    </View>
-                </Marker>
+                {currentTicket?.coordinates &&
+                    typeof currentTicket.coordinates.latitude === 'number' &&
+                    !isNaN(currentTicket.coordinates.latitude) &&
+                    !isNaN(currentTicket.coordinates.longitude) ? (
+                    <Marker
+                        coordinate={{
+                            latitude: currentTicket.coordinates.latitude,
+                            longitude: currentTicket.coordinates.longitude
+                        }}
+                        anchor={{ x: 0.5, y: 0.5 }}
+                        zIndex={1000}
+                    >
+                        <View style={styles.userMarkerOut}>
+                            <Image
+                                source={require('../../../../assets/images/wavinghuman.png')}
+                                style={{ width: 52, height: 52 }}
+                                resizeMode="contain"
+                            />
+                        </View>
+                    </Marker>
+                ) : null}
+
+                {/* VISIBLE PROVIDERS (LIVE RADAR) */}
+                {!assignedProvider && renderProviders.map(p => {
+                    if (!p.coordinates ||
+                        typeof p.coordinates.latitude !== 'number' ||
+                        typeof p.coordinates.longitude !== 'number' ||
+                        isNaN(p.coordinates.latitude) ||
+                        isNaN(p.coordinates.longitude)) return null;
+
+                    return (
+                        <Marker
+                            key={p.id}
+                            coordinate={p.coordinates}
+                            anchor={{ x: 0.5, y: 0.5 }}
+                            opacity={0.8}
+                        >
+                            <View style={styles.miniProviderMarker}>
+                                <Image
+                                    source={{ uri: p.image }}
+                                    style={[
+                                        styles.miniAvatar,
+                                        // Highlight if matches category exactly
+                                        p.category === category && styles.highlightedAvatar
+                                    ]}
+                                />
+                            </View>
+                        </Marker>
+                    );
+                })}
 
                 {/* Show Provider Marker only when found */}
-                {assignedProvider && (
-                    <Marker coordinate={{ latitude: -8.762, longitude: -63.902 }}>
-                        <Image source={{ uri: assignedProvider.image }} style={styles.mapAvatar} />
-                    </Marker>
-                )}
+                {assignedProvider && assignedProvider.coordinates &&
+                    typeof assignedProvider.coordinates.latitude === 'number' &&
+                    !isNaN(assignedProvider.coordinates.latitude) &&
+                    !isNaN(assignedProvider.coordinates.longitude) && (
+                        <Marker coordinate={assignedProvider.coordinates}>
+                            <Image source={{ uri: assignedProvider.image }} style={styles.mapAvatar} />
+                        </Marker>
+                    )}
             </MapView>
 
             {/* Floating Summary Status (C9) */}
-            {status === 'NEW' && (
+            {(status === 'finding' || status === 'NEW') && (
                 <View style={styles.floatingSummary}>
                     <Card style={styles.statusCard} padding={0}>
                         <View style={{ padding: 16 }}>
@@ -244,7 +489,7 @@ export default function RequestMatchScreen() {
             )}
 
             {/* Searching Overlay */}
-            {(status === 'NEW' || status === 'OFFERED') && (
+            {(status === 'finding' || status === 'NEW' || status === 'OFFERED') && (
                 <View style={styles.radarContainer}>
                     <Animated.View
                         style={[
@@ -273,7 +518,7 @@ export default function RequestMatchScreen() {
             )}
 
             {/* Found Card Slide Up */}
-            {(status === 'ACCEPTED' || status === 'PAID' || status === 'EN_ROUTE') && (
+            {(status === 'answered' || status === 'ACCEPTED' || status === 'PAID' || status === 'EN_ROUTE') && (
                 <Animated.View
                     style={[
                         styles.bottomSheet,
@@ -288,15 +533,72 @@ export default function RequestMatchScreen() {
                         </View>
                         <View style={styles.successTitleContainer}>
                             <Text style={styles.successTitle}>
-                                {status === 'ACCEPTED' ? 'Aguardando Pagamento' :
+                                {status === 'answered' ? 'Profissionais interessados' :
+                                    status === 'ACCEPTED' && !assignedProvider ? 'Profissionais aceitaram seu pedido' :
+                                    status === 'ACCEPTED' ? 'Aguardando Pagamento' :
                                     status === 'PAID' ? 'Pedido Confirmado' :
                                         'Profissional a caminho'}
                             </Text>
                             {status === 'EN_ROUTE' && eta && (
                                 <Text style={styles.etaText}>Chegada estimada: {eta} minutos</Text>
                             )}
+                            {status === 'answered' && (
+                                <Text style={styles.offerHint}>Escolha um profissional para continuar</Text>
+                            )}
                         </View>
                     </View>
+
+                    {status === 'answered' && !assignedProvider && (
+                        <ScrollView
+                            style={styles.acceptList}
+                            contentContainerStyle={styles.acceptListContent}
+                            showsVerticalScrollIndicator={false}
+                        >
+                            {isLoadingOffers && (
+                                <View style={styles.offerLoadingRow}>
+                                    <ActivityIndicator size="small" color={Colors.light.primary} />
+                                    <Text style={styles.offerLoadingText}>Carregando ofertas...</Text>
+                                </View>
+                            )}
+                            {!isLoadingOffers && offerCards.length === 0 && (
+                                <View style={styles.offerEmptyState}>
+                                    <Text style={styles.offerEmptyTitle}>Nenhum profissional respondeu ainda</Text>
+                                    <Text style={styles.offerEmptyText}>
+                                        Assim que alguém aceitar, a lista aparece aqui automaticamente.
+                                    </Text>
+                                </View>
+                            )}
+                            {offerCards.map(({ provider, offerId }) => {
+                                const fee = estimateDisplacementFee(provider);
+                                const completedJobs = resolveCompletedJobs(provider);
+                                return (
+                                    <View key={`${provider.id}-${offerId || 'fallback'}`} style={styles.acceptCard}>
+                                        <View style={styles.acceptCardHeader}>
+                                            <Image source={{ uri: provider.image }} style={styles.acceptAvatar} />
+                                            <View style={styles.acceptMainInfo}>
+                                                <Text style={styles.acceptName}>{provider.name}</Text>
+                                                <Text style={styles.acceptCategory}>{provider.category}</Text>
+                                                <View style={styles.acceptMetaRow}>
+                                                    <Text style={styles.acceptMeta}>★ {provider.rating.toFixed(1)} ({provider.reviews})</Text>
+                                                    <Text style={styles.acceptMeta}>• {completedJobs} trabalhos</Text>
+                                                    <Text style={styles.acceptMeta}>• {provider.distance || 'próximo'}</Text>
+                                                </View>
+                                            </View>
+                                            <View style={styles.acceptPriceBadge}>
+                                                <Text style={styles.acceptPrice}>{formatBRL(fee)}</Text>
+                                                <Text style={styles.acceptPriceLabel}>taxa est.</Text>
+                                            </View>
+                                        </View>
+                                        <Button
+                                            title="Aceitar este profissional"
+                                            onPress={() => handleAcceptProvider(provider, offerId)}
+                                            style={styles.acceptCta}
+                                        />
+                                    </View>
+                                );
+                            })}
+                        </ScrollView>
+                    )}
 
                     {assignedProvider && (
                         <View style={styles.providerRow}>
@@ -316,7 +618,7 @@ export default function RequestMatchScreen() {
                     )}
 
                     <View style={styles.actions}>
-                        {status === 'ACCEPTED' && (
+                        {status === 'ACCEPTED' && assignedProvider && (
                             <View style={{ gap: 12 }}>
                                 <View style={styles.feeInfo}>
                                     <Text style={styles.feeLabel}>Taxa de deslocamento</Text>
@@ -324,15 +626,28 @@ export default function RequestMatchScreen() {
                                 </View>
                                 <Button
                                     title="Confirmar e Pagar"
-                                    onPress={() => {
-                                        setStatus('PAID');
+                                    onPress={async () => {
+                                        if (!currentTicket?.id) return;
+                                        const { error } = await supabase
+                                            .from('requests')
+                                            .update({ status: 'paid' })
+                                            .eq('id', currentTicket.id);
+                                        if (error) {
+                                            Alert.alert('Erro', 'Não foi possível atualizar o status.');
+                                        }
                                     }}
                                     style={{ backgroundColor: Colors.light.primary }}
                                 />
                                 <TouchableOpacity
-                                    onPress={() => {
-                                        setAssignedProvider(null);
-                                        setStatus('NEW');
+                                    onPress={async () => {
+                                        if (!currentTicket?.id) return;
+                                        const { error } = await supabase
+                                            .from('requests')
+                                            .update({ status: 'declined', provider_id: null })
+                                            .eq('id', currentTicket.id);
+                                        if (error) {
+                                            Alert.alert('Erro', 'Não foi possível recusar o profissional.');
+                                        }
                                     }}
                                     style={styles.declineBtn}
                                 >
@@ -396,6 +711,31 @@ const styles = StyleSheet.create({
         borderRadius: 20,
         borderWidth: 2,
         borderColor: '#fff',
+    },
+    miniProviderMarker: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
+        elevation: 2,
+    },
+    miniAvatar: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#fff',
+        opacity: 0.8
+    },
+    highlightedAvatar: {
+        borderColor: Colors.light.primary,
+        borderWidth: 2,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        opacity: 1
     },
     radarContainer: {
         ...StyleSheet.absoluteFillObject,
@@ -531,6 +871,119 @@ const styles = StyleSheet.create({
     timeText: {
         fontWeight: 'bold',
         color: '#333',
+    },
+    offerHint: {
+        marginTop: 4,
+        fontSize: 13,
+        color: Colors.light.textSecondary,
+        fontWeight: '500',
+    },
+    acceptList: {
+        maxHeight: 360,
+    },
+    acceptListContent: {
+        gap: 12,
+        paddingBottom: 8,
+    },
+    acceptCard: {
+        backgroundColor: '#fff',
+        borderRadius: 18,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.06)',
+        ...Layout.shadows.small,
+    },
+    acceptCardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    acceptAvatar: {
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        marginRight: 12,
+        borderWidth: 2,
+        borderColor: '#fff',
+    },
+    acceptMainInfo: {
+        flex: 1,
+    },
+    acceptName: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#111',
+    },
+    acceptCategory: {
+        marginTop: 2,
+        fontSize: 13,
+        color: Colors.light.textSecondary,
+        fontWeight: '600',
+    },
+    acceptMetaRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        marginTop: 6,
+        gap: 6,
+    },
+    acceptMeta: {
+        fontSize: 12,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    acceptPriceBadge: {
+        backgroundColor: '#F0FDF4',
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        alignItems: 'flex-end',
+        borderWidth: 1,
+        borderColor: '#DCFCE7',
+    },
+    acceptPrice: {
+        fontSize: 14,
+        fontWeight: '800',
+        color: Colors.light.success,
+    },
+    acceptPriceLabel: {
+        fontSize: 10,
+        color: Colors.light.textSecondary,
+        fontWeight: '600',
+    },
+    acceptCta: {
+        backgroundColor: Colors.light.primary,
+    },
+    offerLoadingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 6,
+    },
+    offerLoadingText: {
+        fontSize: 13,
+        color: Colors.light.textSecondary,
+        fontWeight: '500',
+    },
+    offerEmptyState: {
+        paddingVertical: 16,
+        paddingHorizontal: 12,
+        borderRadius: 14,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        alignItems: 'center',
+        gap: 6,
+    },
+    offerEmptyTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#0F172A',
+    },
+    offerEmptyText: {
+        fontSize: 12,
+        color: '#64748B',
+        textAlign: 'center',
     },
     actions: {
         gap: 10,

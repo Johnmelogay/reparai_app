@@ -40,23 +40,21 @@ export default function ProviderDetailScreen() {
             if (!id) return;
             const { data, error } = await supabase
                 .from('partners')
-                .select('*, profiles(full_name, avatar_url)')
+                .select('*')
                 .eq('id', id)
                 .single();
 
             if (data) {
-                const profile = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
-
                 setProvider({
                     id: data.id,
-                    name: profile?.full_name || 'Prestador',
-                    image: profile?.avatar_url,
+                    name: data.full_name || 'Prestador',
+                    image: data.avatar_url,
                     rating: data.rating || 5.0,
                     reviews: 220, // Mocked to match reference roughly
                     category: data.service_category,
                     categories: [data.service_category],
                     visitPrice: data.base_fee,
-                    distance: '0.9 km', // Mocked to match reference
+                    distance: '0.9 km', // Mocked to match reference, or use calculated if passed via params
                     coordinates: { latitude: 0, longitude: 0 },
                     status: data.is_online ? 'online' : 'offline',
                     badges: ['Super'], // Mocked 'Super' badge

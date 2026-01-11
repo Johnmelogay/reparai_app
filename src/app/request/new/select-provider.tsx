@@ -18,12 +18,26 @@ export default function SelectProviderScreen() {
     const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
 
+    const resolveCategoryFilters = (value: string | null): string[] => {
+        if (!value) return [];
+        const normalized = value.toLowerCase();
+        const domainMap: Record<string, string[]> = {
+            mobilidade: ['auto'],
+            casa: ['hvac', 'plumbing', 'electrical', 'handyman'],
+            tecnologia: ['electronics'],
+        };
+
+        return domainMap[normalized] || [normalized];
+    };
+
     // Simulate receiving offers
     useEffect(() => {
         const timer = setTimeout(() => {
+            const categoryFilters = resolveCategoryFilters(category);
+
             // Generate mock offers from nearby providers
-            const offers = NEARBY_PROVIDERS.filter(p => 
-                !category || p.categories.includes(category || '')
+            const offers = NEARBY_PROVIDERS.filter(p =>
+                categoryFilters.length === 0 || categoryFilters.some(filter => p.categories.includes(filter))
             ).slice(0, 3).map(provider => ({
                 provider,
                 price: Math.floor(Math.random() * 100) + 50,
@@ -356,4 +370,3 @@ const styles = StyleSheet.create({
         ...Layout.shadows.medium,
     },
 });
-

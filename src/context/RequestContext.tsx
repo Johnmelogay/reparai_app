@@ -108,6 +108,30 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     // Referência para o canal de subscription
     const [orderChannel, setOrderChannel] = useState<RealtimeChannel | null>(null);
 
+    const normalizeStatus = (raw?: string | null): TicketStatus | 'idle' | 'drafting' => {
+        if (!raw) return 'idle';
+        const status = raw.toString();
+        const normalized = status.toLowerCase();
+        const map: Record<string, TicketStatus> = {
+            new: 'NEW',
+            offered: 'OFFERED',
+            finding: 'finding',
+            answered: 'answered',
+            accepted: 'ACCEPTED',
+            paid: 'PAID',
+            en_route: 'EN_ROUTE',
+            done: 'DONE',
+            completed: 'DONE',
+            canceled: 'CANCELED',
+            cancelled: 'CANCELED',
+            declined: 'declined',
+            expired: 'expired',
+            drafting: 'drafting' as any,
+        };
+
+        return map[normalized] || (status as TicketStatus);
+    };
+
     // ============================================
     // PERSISTÊNCIA & HYDRATE
     // ============================================
@@ -117,7 +141,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             const savedDraft = await getItem<Partial<Ticket>>(STORAGE_KEYS.ACTIVE_DRAFT);
             if (savedDraft) {
                 setCurrentTicket(savedDraft);
-                setStatus(savedDraft.status as any || 'drafting');
+                setStatus(normalizeStatus(savedDraft.status as any || 'drafting'));
                 setCategory(savedDraft.category || null);
                 setTrack(savedDraft.track || null);
                 setDescription(savedDraft.description || '');
@@ -167,7 +191,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
                 },
                 (payload) => {
                     console.log('⚡ Atualização do Pedido recebida:', payload);
-                    const newStatus = payload.new.status;
+                    const newStatus = normalizeStatus(payload.new.status);
                     const newProviderId = payload.new.provider_id;
                     const aiJson = payload.new.ai_result_json;
 
@@ -308,19 +332,29 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     };
 
     const submitRequest = async (): Promise<string> => {
-        // 1. Preparar dados para Supabase
-        const lat = currentTicket?.coordinates?.latitude;
-        const lng = currentTicket?.coordinates?.longitude;
+        // 1. Get Real User
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('Usuario nao autenticado');
+
+        // 2. Preparar dados para Supabase
+        const lat = currentTicket?.coordinates?.latitude ?? locationContext?.selectedLocation?.latitude;
+        const lng = currentTicket?.coordinates?.longitude ?? locationContext?.selectedLocation?.longitude;
+        const address = currentTicket?.address ?? locationContext?.selectedLocation?.address;
+
+        // Calculate expiration for urgent/instant requests (2 minutes from now)
+        const isUrgent = track === 'instant';
+        const expiresAt = isUrgent ? new Date(Date.now() + 2 * 60 * 1000).toISOString() : null;
 
         const ticketData = {
-            user_id: 'd0e82c11-92af-49a3-9118-204128036021', // TODO: Pegar do Auth Real
+            user_id: user.id,
             status: 'finding',
             category: category,
             user_text: description, // Changed from description to user_text
-            address: currentTicket?.address, // Changed from user_address to address
+            address: address, // Changed from user_address to address
             answers_json: funnelAnswers,
             lat: lat,
-            lng: lng
+            lng: lng,
+            expires_at: expiresAt
         };
 
         try {
@@ -345,13 +379,13 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             const createdTicket: Partial<Ticket> = {
                 ...currentTicket,
                 id: newTicketId,
-                status: 'NEW', // Mapeando 'finding' -> 'NEW' no frontend
+                status: 'finding',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
             };
 
             setCurrentTicket(createdTicket);
-            setStatus('NEW');
+            setStatus('finding');
             saveDraft(createdTicket);
 
             // 4. Iniciar escuta Realtime
@@ -373,24 +407,27 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
 
 
             // Simulation of provider matching (for demo purposes)
-            setTimeout(() => {
-                setStatus('ACCEPTED');
-                setAssignedProvider({
-                    id: 'p1',
-                    name: 'Carlos Oliveira',
-                    category: category || 'hvac',
-                    image: 'https://i.pravatar.cc/150?u=Carlos',
-                    rating: 4.9,
-                    reviews: 128,
-                    status: 'online',
-                    distance: '1.2 km',
-                    isPremium: true,
-                    coordinates: {
-                        latitude: lat ? lat + 0.005 : -8.76,
-                        longitude: lng ? lng + 0.005 : -63.90
-                    }
-                } as any);
-            }, 8000); // Increased to give AI more time to shine
+            const enableDemoMatching = __DEV__ && process.env.EXPO_PUBLIC_ENABLE_DEMO_MATCHING === 'true';
+            if (enableDemoMatching) {
+                setTimeout(() => {
+                    setStatus('ACCEPTED');
+                    setAssignedProvider({
+                        id: 'p1',
+                        name: 'Carlos Oliveira',
+                        category: category || 'hvac',
+                        image: 'https://i.pravatar.cc/150?u=Carlos',
+                        rating: 4.9,
+                        reviews: 128,
+                        status: 'online',
+                        distance: '1.2 km',
+                        isPremium: true,
+                        coordinates: {
+                            latitude: lat ? lat + 0.005 : -8.76,
+                            longitude: lng ? lng + 0.005 : -63.90
+                        }
+                    } as any);
+                }, 8000); // Increased to give AI more time to shine
+            }
 
             return newTicketId;
 
@@ -399,7 +436,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             // Fallback para mock se falhar (para garantir a experiência na demo)
             const mockId = `mock_ticket_${Date.now()}`;
             console.log('⚠️ Fallback: Usando ID Mock', mockId);
-            setStatus('NEW');
+            setStatus('finding');
             return mockId;
         }
     };
@@ -409,7 +446,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         if (currentTicket?.id && !currentTicket.id.startsWith('mock_')) {
             try {
                 await supabase
-                    .from('orders')
+                    .from('requests')
                     .update({ status: 'canceled' })
                     .eq('id', currentTicket.id);
             } catch (e) {

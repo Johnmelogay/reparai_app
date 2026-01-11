@@ -1,11 +1,11 @@
+import { GooglePlacesInput } from '@/components/GooglePlacesInput';
+import { MapPickerModal } from '@/components/modals/MapPickerModal';
 import { Colors } from '@/constants/Colors';
-import { BRANDED_MAP_STYLE } from '@/constants/MapStyles';
 import { useLocation } from '@/context/LocationContext';
-import * as Location from 'expo-location';
-import { Briefcase, ChevronLeft, Home, MapPin, Navigation, Search, Star, X } from 'lucide-react-native';
-import React, { useEffect, useRef, useState } from 'react';
+import { useGooglePlaces } from '@/hooks/useGooglePlaces';
+import { Briefcase, Home, MapPin, Navigation, X } from 'lucide-react-native';
+import React, { useEffect, useState } from 'react';
 import { Dimensions, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width, height } = Dimensions.get('window');
@@ -24,47 +24,29 @@ export default function AddressSelectionModal({ visible, onClose }: AddressSelec
         refreshLocation,
         searchAddress,
         address: currentAddress,
-        savedAddresses
+        savedAddresses,
+        saveAddress
     } = useLocation();
 
     const insets = useSafeAreaInsets();
-    const [viewMode, setViewMode] = useState<'LIST' | 'MAP_PICKER'>('LIST');
+    const { getPlaceDetails } = useGooglePlaces();
     const [searchText, setSearchText] = useState('');
-    const [searchResults, setSearchResults] = useState<{ latitude: number, longitude: number, address: string }[]>([]);
-    const [searching, setSearching] = useState(false);
-    const [pickerRegion, setPickerRegion] = useState({
-        latitude: selectedLocation?.latitude || gpsLocation?.coords.latitude || -8.76183,
-        longitude: selectedLocation?.longitude || gpsLocation?.coords.longitude || -63.90177,
-        latitudeDelta: 0.005,
-        longitudeDelta: 0.005,
-    });
-    const [pickerAddress, setPickerAddress] = useState('Centralizando...');
-    const mapRef = useRef<MapView>(null);
+    const [mapPickerVisible, setMapPickerVisible] = useState(false);
 
-    // Reset view when opening
+    // Save flow state
+    const [showSaveFlow, setShowSaveFlow] = useState(false);
+    const [selectedIcon, setSelectedIcon] = useState<'Home' | 'Briefcase' | 'MapPin' | null>(null);
+    const [addressName, setAddressName] = useState('');
+
+    // Reset when opening
     useEffect(() => {
         if (visible) {
-            setViewMode('LIST');
             setSearchText('');
-            setSearchResults([]);
+            setShowSaveFlow(false);
+            setSelectedIcon(null);
+            setAddressName('');
         }
     }, [visible]);
-
-    // Handle search input with debounce
-    useEffect(() => {
-        const timer = setTimeout(async () => {
-            if (searchText.length > 3) {
-                setSearching(true);
-                const results = await searchAddress(searchText);
-                setSearchResults(results);
-                setSearching(false);
-            } else {
-                setSearchResults([]);
-            }
-        }, 800);
-
-        return () => clearTimeout(timer);
-    }, [searchText]);
 
     const handleSelectSaved = (saved: any) => {
         selectLocation(saved.latitude, saved.longitude, saved.address);
@@ -76,64 +58,59 @@ export default function AddressSelectionModal({ visible, onClose }: AddressSelec
         onClose();
     };
 
-    const handleConfirmPicker = () => {
-        selectLocation(pickerRegion.latitude, pickerRegion.longitude, pickerAddress);
-        onClose();
-    };
 
-    const handleSearchResultSelect = (result: any) => {
-        setPickerRegion({
-            ...pickerRegion,
-            latitude: result.latitude,
-            longitude: result.longitude,
-        });
-        setPickerAddress(result.address);
-        setViewMode('MAP_PICKER');
-
-        // Ensure map animates to the new location
-        setTimeout(() => {
-            mapRef.current?.animateToRegion({
-                latitude: result.latitude,
-                longitude: result.longitude,
-                latitudeDelta: 0.005,
-                longitudeDelta: 0.005,
-            }, 1000);
-        }, 100);
-    };
-
-    // Reverse geocode whenever picker region changes (drag ends)
-    const onRegionChangeComplete = async (region: any) => {
-        setPickerRegion(region);
-        try {
-            const reverse = await Location.reverseGeocodeAsync({ latitude: region.latitude, longitude: region.longitude });
-            if (reverse.length > 0) {
-                const place = reverse[0];
-                const street = place.street || place.name || '';
-                const number = place.streetNumber || '';
-                const district = place.district || place.subregion || '';
-                const city = place.city || '';
-
-                let formatted = `${street}${number ? `, ${number}` : ''}`;
-                if (district && district !== street) formatted += ` - ${district}`;
-                if (city && !formatted.includes(city)) formatted += `, ${city}`;
-
-                setPickerAddress(formatted);
-            }
-        } catch (e) {
-            setPickerAddress('Endereço desconhecido');
+    const handleSearchResultSelect = async (placeId: string, text: string) => {
+        setSearchText(text);
+        const details = await getPlaceDetails(placeId);
+        if (details) {
+            selectLocation(details.location.latitude, details.location.longitude, details.formattedAddress);
+            // Don't close immediately - let user save if they want
         }
+    };
+
+    const handleStartSaveFlow = () => {
+        setShowSaveFlow(true);
+    };
+
+    const handleIconSelect = (icon: 'Home' | 'Briefcase' | 'MapPin') => {
+        setSelectedIcon(icon);
+        // Auto-fill name based on icon
+        const defaultNames = {
+            'Home': 'Casa',
+            'Briefcase': 'Trabalho',
+            'MapPin': 'Meu Local'
+        };
+        setAddressName(defaultNames[icon]);
+    };
+
+    const handleSaveAddress = async () => {
+        if (!selectedLocation || !selectedIcon || !addressName.trim()) return;
+
+        await saveAddress({
+            name: addressName,
+            address: selectedLocation.address,
+            latitude: selectedLocation.latitude,
+            longitude: selectedLocation.longitude,
+            streetNumber: selectedLocation.streetNumber,
+            neighborhood: selectedLocation.neighborhood,
+            city: selectedLocation.city,
+            state: selectedLocation.state,
+            icon: selectedIcon
+        });
+
+        // Reset and close
+        setShowSaveFlow(false);
+        setSelectedIcon(null);
+        setAddressName('');
+        onClose();
     };
 
     const renderHeader = () => (
         <View style={styles.header}>
-            {viewMode === 'MAP_PICKER' ? (
-                <TouchableOpacity onPress={() => setViewMode('LIST')} style={styles.backButton}>
-                    <ChevronLeft size={24} color={Colors.light.text} />
-                </TouchableOpacity>
-            ) : <View style={{ width: 24 }} />}
+            <View style={{ width: 24 }} />
 
             <Text style={styles.headerTitle}>
-                {viewMode === 'LIST' ? 'Onde será o serviço?' : 'Confirmar Localização'}
+                Onde será o serviço?
             </Text>
 
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
@@ -143,60 +120,112 @@ export default function AddressSelectionModal({ visible, onClose }: AddressSelec
     );
 
     const renderSearchBar = () => (
-        <View style={styles.searchContainer}>
-            {searching ? (
-                <View style={[styles.searchIcon, { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }]}>
-                    {/* Simple loading dot for now */}
-                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.light.primary }} />
-                </View>
-            ) : (
-                <Search size={20} color={Colors.light.textSecondary} style={styles.searchIcon} />
-            )}
-            <TextInput
-                style={styles.searchInput}
-                placeholder="Buscar endereço e número"
-                placeholderTextColor="#94A3B8"
+        <View style={{ marginBottom: 20, zIndex: 10 }}>
+            <GooglePlacesInput
                 value={searchText}
                 onChangeText={setSearchText}
-                autoCorrect={false}
-                clearButtonMode="while-editing"
+                onSelect={handleSearchResultSelect}
+                placeholder="Buscar endereço e número"
             />
         </View>
     );
 
     const renderSearchBarTitle = () => {
-        if (searchText.length > 0) return null;
         return <Text style={styles.sectionTitle}>Endereços Salvos</Text>;
     };
 
-    const renderSearchResults = () => (
-        <FlatList
-            data={searchResults}
-            keyExtractor={(item, index) => `search-${index}`}
-            renderItem={({ item }) => (
-                <TouchableOpacity style={styles.searchResultItem} onPress={() => handleSearchResultSelect(item)}>
-                    <View style={styles.searchResultIcon}>
-                        <MapPin size={18} color={Colors.light.textSecondary} />
+    const renderAddressPreview = () => {
+        if (!selectedLocation) return null;
+
+        return (
+            <View style={styles.addressPreviewCard}>
+                <View style={styles.addressPreviewHeader}>
+                    <View style={styles.addressPreviewIconLarge}>
+                        <MapPin size={22} color="#6B7280" strokeWidth={2.5} />
                     </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.searchResultText} numberOfLines={2}>{item.address}</Text>
+                    <Text style={styles.addressPreviewLabel}>Endereço selecionado</Text>
+                </View>
+                <Text style={styles.addressPreviewAddress} numberOfLines={2}>
+                    {selectedLocation.address}
+                </Text>
+            </View>
+        );
+    };
+
+    const renderSaveButton = () => {
+        if (!selectedLocation || showSaveFlow) return null;
+
+        return (
+            <TouchableOpacity style={styles.primaryButton} onPress={handleStartSaveFlow}>
+                <Text style={styles.primaryButtonText}>Salvar este endereço</Text>
+            </TouchableOpacity>
+        );
+    };
+
+    const renderIconPicker = () => {
+        if (!showSaveFlow) return null;
+
+        const icons: Array<{ key: 'Home' | 'Briefcase' | 'MapPin', label: string, icon: any }> = [
+            { key: 'Home', label: 'Casa', icon: Home },
+            { key: 'Briefcase', label: 'Trabalho', icon: Briefcase },
+            { key: 'MapPin', label: 'Pin', icon: MapPin }
+        ];
+
+        return (
+            <View style={styles.iconPickerContainer}>
+                <Text style={styles.iconPickerTitle}>Escolha um ícone para salvar</Text>
+                <View style={styles.iconRow}>
+                    {icons.map((item) => {
+                        const IconComponent = item.icon;
+                        const isSelected = selectedIcon === item.key;
+                        return (
+                            <TouchableOpacity
+                                key={item.key}
+                                style={[styles.iconChip, isSelected && styles.iconChipSelected]}
+                                onPress={() => handleIconSelect(item.key)}
+                            >
+                                <IconComponent size={20} color={isSelected ? '#fff' : Colors.light.primary} />
+                                <Text style={[styles.iconChipText, isSelected && styles.iconChipTextSelected]}>
+                                    {item.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
+
+                {selectedIcon && (
+                    <View style={{ marginTop: 16 }}>
+                        <Text style={styles.inputLabel}>Nome do endereço</Text>
+                        <TextInput
+                            style={styles.nameInput}
+                            value={addressName}
+                            onChangeText={setAddressName}
+                            placeholder="Ex: Casa de Praia"
+                            placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.confirmSaveButton} onPress={handleSaveAddress}>
+                            <Text style={styles.confirmSaveButtonText}>Confirmar</Text>
+                        </TouchableOpacity>
                     </View>
-                </TouchableOpacity>
-            )}
-            style={{ flex: 1 }}
-        />
-    );
+                )}
+            </View>
+        );
+    };
 
     const renderSavedItem = ({ item }: { item: any }) => {
-        const Icon = item.icon === 'Home' ? Home : item.icon === 'Briefcase' ? Briefcase : Star;
+        const Icon = item.icon === 'Home' ? Home : item.icon === 'Briefcase' ? Briefcase : MapPin;
         return (
-            <TouchableOpacity style={styles.savedItem} onPress={() => handleSelectSaved(item)}>
-                <View style={styles.savedIconContainer}>
-                    <Icon size={20} color={Colors.light.primary} />
+            <TouchableOpacity
+                style={styles.savedItemCard}
+                onPress={() => handleSelectSaved(item)}
+                activeOpacity={0.7}
+            >
+                <View style={styles.savedItemIcon}>
+                    <Icon size={22} color="#6B7280" strokeWidth={2.2} />
                 </View>
-                <View>
-                    <Text style={styles.savedName}>{item.name}</Text>
-                    <Text style={styles.savedAddress}>{item.address}</Text>
+                <View style={styles.savedItemContent}>
+                    <Text style={styles.savedItemName}>{item.name}</Text>
+                    <Text style={styles.savedItemAddress} numberOfLines={1}>{item.address}</Text>
                 </View>
             </TouchableOpacity>
         );
@@ -207,67 +236,67 @@ export default function AddressSelectionModal({ visible, onClose }: AddressSelec
             <View style={[styles.safeArea, { paddingTop: Math.max(insets.top, 20) }]}>
                 {renderHeader()}
 
-                {viewMode === 'LIST' ? (
-                    <View style={styles.content}>
-                        {renderSearchBar()}
+                <View style={styles.content}>
+                    {renderSearchBar()}
 
-                        {searchText.length > 0 ? (
-                            renderSearchResults()
-                        ) : (
-                            <>
-                                <TouchableOpacity style={styles.currentLocationRow} onPress={handleUseCurrentLocation}>
-                                    <View style={[styles.savedIconContainer, { backgroundColor: 'rgba(253, 123, 5, 0.1)' }]}>
-                                        <Navigation size={20} color={Colors.light.primary} />
+                    {/* Only show these if NOT in save flow */}
+                    {!showSaveFlow && (
+                        <>
+                            {renderAddressPreview()}
+                            {renderSaveButton()}
+
+                            <View style={styles.sectionDivider} />
+
+                            <TouchableOpacity
+                                style={styles.locationButton}
+                                onPress={handleUseCurrentLocation}
+                                activeOpacity={0.7}
+                            >
+                                <View style={styles.locationButtonIcon}>
+                                    <Navigation size={20} color={Colors.light.accent} strokeWidth={2.5} />
+                                </View>
+                                <Text style={styles.locationButtonText}>Usar minha localização atual</Text>
+                            </TouchableOpacity>
+
+                            <View style={styles.sectionDivider} />
+
+                            <Text style={styles.sectionHeader}>Meus endereços</Text>
+                            <FlatList
+                                data={savedAddresses}
+                                renderItem={renderSavedItem}
+                                keyExtractor={item => item.id}
+                                contentContainerStyle={{ paddingBottom: 20 }}
+                                ListEmptyComponent={
+                                    <View style={styles.emptyState}>
+                                        <MapPin size={32} color="#D1D5DB" strokeWidth={1.5} />
+                                        <Text style={styles.emptyStateText}>Nenhum endereço salvo</Text>
                                     </View>
-                                    <Text style={styles.currentLocationText}>Usar localização atual</Text>
-                                </TouchableOpacity>
+                                }
+                            />
+                        </>
+                    )}
 
-                                {renderSearchBarTitle()}
-                                <FlatList
-                                    data={savedAddresses}
-                                    renderItem={renderSavedItem}
-                                    keyExtractor={item => item.id}
-                                    contentContainerStyle={{ paddingBottom: 20 }}
-                                />
-                            </>
-                        )}
+                    {/* Show icon picker when in save flow */}
+                    {renderIconPicker()}
 
-                        {searchText.length === 0 && (
-                            <TouchableOpacity style={styles.mapPickerButton} onPress={() => setViewMode('MAP_PICKER')}>
-                                <MapPin size={20} color="#fff" />
-                                <Text style={styles.mapPickerButtonText}>Selecionar no Mapa</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                ) : (
-                    <View style={styles.pickerContainer}>
-                        <MapView
-                            ref={mapRef}
-                            style={StyleSheet.absoluteFillObject}
-                            initialRegion={pickerRegion}
-                            onRegionChangeComplete={onRegionChangeComplete}
-                            provider={PROVIDER_GOOGLE}
-                            customMapStyle={BRANDED_MAP_STYLE}
+                    {searchText.length === 0 && (
+                        <TouchableOpacity style={styles.mapPickerButton} onPress={() => setMapPickerVisible(true)}>
+                            <MapPin size={20} color="#fff" />
+                            <Text style={styles.mapPickerButtonText}>Selecionar no Mapa</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
 
-                            userInterfaceStyle="light"
-                        />
-                        {/* Fixed Pin in Center */}
-                        <View style={styles.fixedPinContainer}>
-                            <View style={styles.pinBubble}>
-                                <Home size={20} color="#fff" fill="#fff" />
-                            </View>
-                            <View style={styles.pinStick} />
-                        </View>
-
-                        <View style={styles.pickerFooter}>
-                            <Text style={styles.pickerLabel}>Endereço selecionado</Text>
-                            <Text style={styles.pickerAddress} numberOfLines={2}>{pickerAddress}</Text>
-                            <TouchableOpacity style={styles.confirmButton} onPress={handleConfirmPicker}>
-                                <Text style={styles.confirmButtonText}>Confirmar este local</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                )}
+                {/* New Map Picker Component Logic */}
+                <MapPickerModal
+                    visible={mapPickerVisible}
+                    onClose={() => setMapPickerVisible(false)}
+                    onConfirm={(loc: { lat: number, lng: number, address: string }) => {
+                        selectLocation(loc.lat, loc.lng, loc.address);
+                        setMapPickerVisible(false);
+                        onClose(); // Close parent modal too
+                    }}
+                />
             </View>
         </Modal>
     );
@@ -320,47 +349,73 @@ const styles = StyleSheet.create({
     currentLocationRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 30,
-        paddingVertical: 8,
+        marginBottom: 24,
+        paddingVertical: 10,
     },
-    currentLocationText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: Colors.light.primary,
-        marginLeft: 12,
-    },
-    sectionTitle: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#94A3B8',
-        marginBottom: 12,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-    },
-    savedItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 16,
-        paddingVertical: 8,
-    },
-    savedIconContainer: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#F1F5F9',
+    currentLocationIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: 'rgba(253, 123, 5, 0.1)',
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
     },
-    savedName: {
-        fontSize: 16,
+    currentLocationText: {
+        fontSize: 15,
         fontWeight: '600',
-        color: Colors.light.text,
-        marginBottom: 2,
+        color: Colors.light.accent,
+    },
+    sectionTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#9CA3AF',
+        marginBottom: 14,
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+    },
+    emptyText: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
+        paddingVertical: 32,
+        fontStyle: 'italic',
+    },
+    divider: {
+        height: 1,
+        backgroundColor: '#F0F1F3',
+        marginVertical: 20,
+    },
+    savedItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        backgroundColor: '#FAFBFC',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#F0F1F3',
+    },
+    savedIconContainer: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: 'rgba(253, 123, 5, 0.08)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 14,
+    },
+    savedName: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#1F2937',
+        marginBottom: 4,
     },
     savedAddress: {
         fontSize: 13,
-        color: Colors.light.textSecondary,
+        color: '#6B7280',
+        lineHeight: 18,
     },
     searchResultItem: {
         flexDirection: 'row',
@@ -469,5 +524,249 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: 'bold',
+    },
+    // === PREMIUM REDESIGN STYLES ===
+
+    // Address Preview Card
+    addressPreviewCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
+        padding: 14,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    addressPreviewHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    addressPreviewIconLarge: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    addressPreviewLabel: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#6B7280',
+        textTransform: 'capitalize',
+    },
+    addressPreviewAddress: {
+        fontSize: 15,
+        color: '#111827',
+        fontWeight: '500',
+        lineHeight: 22,
+    },
+
+    // Primary Button (Save Button)
+    primaryButton: {
+        backgroundColor: Colors.light.primary,
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        borderRadius: 20,
+        alignItems: 'center',
+        marginBottom: 16,
+        shadowColor: Colors.light.primary,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.2,
+        shadowRadius: 6,
+        elevation: 4,
+    },
+    primaryButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '700',
+        letterSpacing: 0.2,
+    },
+
+    // Section Divider
+    sectionDivider: {
+        height: 1,
+        backgroundColor: '#E5E7EB',
+        marginVertical: 16,
+    },
+
+    // Location Button
+    locationButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        marginBottom: 0,
+    },
+    locationButtonIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    locationButtonText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: Colors.light.accent,
+        flex: 1,
+    },
+
+    // Section Header
+    sectionHeader: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 12,
+        marginTop: 0,
+    },
+
+    // Saved Item Cards
+    savedItemCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderRadius: 20,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.02,
+        shadowRadius: 4,
+        elevation: 1,
+    },
+    savedItemIcon: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    savedItemContent: {
+        flex: 1,
+    },
+    savedItemName: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 4,
+    },
+    savedItemAddress: {
+        fontSize: 13,
+        color: '#6B7280',
+        lineHeight: 18,
+    },
+
+    // Empty State
+    emptyState: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 48,
+    },
+    emptyStateText: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        marginTop: 12,
+        fontWeight: '500',
+    },
+
+    // Icon Picker Styles (keeping existing good styles)
+    iconPickerContainer: {
+        backgroundColor: '#FAFBFC',
+        padding: 16,
+        borderRadius: 20,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    iconPickerTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 12,
+    },
+    iconRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 10,
+    },
+    iconChip: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 8,
+        borderRadius: 12,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#E5E7EB',
+    },
+    iconChipSelected: {
+        backgroundColor: Colors.light.primary,
+        borderColor: Colors.light.primary,
+        shadowColor: Colors.light.primary,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    iconChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#374151',
+        marginLeft: 6,
+    },
+    iconChipTextSelected: {
+        color: '#FFFFFF',
+        fontWeight: '700',
+    },
+    inputLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#374151',
+        marginBottom: 8,
+    },
+    nameInput: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        borderRadius: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        fontSize: 15,
+        color: '#111827',
+        marginBottom: 16,
+    },
+    confirmSaveButton: {
+        backgroundColor: Colors.light.primary,
+        paddingVertical: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        shadowColor: Colors.light.primary,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    confirmSaveButtonText: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+        letterSpacing: 0.3,
     },
 });

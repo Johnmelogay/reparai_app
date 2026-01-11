@@ -15,7 +15,7 @@ import { calculateDistance } from '@/utils/geo';
 import { getItem, saveItem } from '@/utils/storage';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-const PARTNERS_CACHE_KEY = 'cached_partners_v3';
+const PARTNERS_CACHE_KEY = 'cached_partners_v4';
 
 export const usePartners = (radiusMeters: number = 500000) => {
     const { location, selectedLocation } = useLocation();
@@ -62,9 +62,8 @@ export const usePartners = (radiusMeters: number = 500000) => {
 
                 if (data && isMounted) {
                     const mappedProviders: Provider[] = data.map((p: any) => {
-                        // Heuristic: 'auto' category usually means Physical Workshop (Oficina)
-                        // Others are typically Mobile Freelancers (Autônomos)
-                        const isOficina = p.service_category === 'auto' || p.service_category === 'mecanica';
+                        // Backend now returns explicit 'type' (FIXED vs MOBILE)
+                        const isOficina = p.type === 'FIXED';
 
                         return {
                             id: p.id,
@@ -77,17 +76,18 @@ export const usePartners = (radiusMeters: number = 500000) => {
                             hourlyRate: p.hourly_rate || 100,
                             distance: p.dist_km ? `${p.dist_km.toFixed(1)}km` : '...',
                             coordinates: {
-                                latitude: p.lat,
-                                longitude: p.long,
+                                latitude: parseFloat(p.lat),
+                                longitude: parseFloat(p.long),
                             },
                             status: p.is_online ? 'online' : 'offline',
                             badges: [],
-                            // This specific string is used by Search Filter logic
+                            // Mapping backend type to UI label
+                            type: p.type,
                             address: isOficina ? 'Oficina' : 'Prestador autônomo',
                             visitPrice: '50,00',
                             operationalScore: 100
                         };
-                    });
+                    }).filter(p => p.coordinates.latitude && p.coordinates.longitude); // Safety Filter for Maps
 
                     setProviders(mappedProviders);
                     await saveItem(PARTNERS_CACHE_KEY, mappedProviders);

@@ -1,20 +1,36 @@
 import { Colors } from '@/constants/Colors';
-import { Bell } from 'lucide-react-native';
+import { Bell, CheckCheck } from 'lucide-react-native';
 import React from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
 import { useAuth } from '@/context/AuthContext';
+import { useNotifications } from '@/hooks/useNotifications';
 import { useState } from 'react';
-import { TouchableOpacity } from 'react-native';
 
-// TODO: Connect to Real Notification Service
-const NOTIFICATIONS: any[] = [];
+// Helper function to format notification time
+function formatTime(timestamp: string): string {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Agora';
+    if (diffMins < 60) return `${diffMins}min`;
+    if (diffHours < 24) return `${diffHours}h`;
+    if (diffDays === 1) return 'Ontem';
+    if (diffDays < 7) return `${diffDays}d`;
+
+    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+}
 
 export default function NotificationsScreen() {
     const { isGuest } = useAuth();
     const [showAuth, setShowAuth] = useState(false);
+    const { notifications, loading, unreadCount, fetchNotifications, markAsRead, markAllAsRead } = useNotifications();
 
     if (isGuest) {
         return (
@@ -47,30 +63,58 @@ export default function NotificationsScreen() {
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
-            <Text style={styles.title}>Notificações</Text>
-            <FlatList
-                data={NOTIFICATIONS}
-                keyExtractor={item => item.id}
-                contentContainerStyle={styles.listContent}
-                ListEmptyComponent={
-                    <View style={{ alignItems: 'center', marginTop: 50 }}>
-                        <Text style={{ color: '#999', fontSize: 16 }}>Nenhuma notificação nova.</Text>
-                    </View>
-                }
-                renderItem={({ item }) => (
-                    <View style={[styles.item, !item.read && styles.unread]}>
-                        <View style={styles.iconContainer}>
-                            <Bell size={20} color={!item.read ? Colors.light.primary : '#999'} />
-                        </View>
-                        <View style={styles.textContainer}>
-                            <Text style={styles.itemTitle}>{item.title}</Text>
-                            <Text style={styles.itemBody}>{item.body}</Text>
-                            <Text style={styles.itemTime}>{item.time}</Text>
-                        </View>
-                        {!item.read && <View style={styles.dot} />}
-                    </View>
+            <View style={styles.header}>
+                <Text style={styles.title}>Notificações</Text>
+                {unreadCount > 0 && (
+                    <TouchableOpacity onPress={markAllAsRead} style={styles.markAllButton}>
+                        <CheckCheck size={18} color={Colors.light.primary} />
+                        <Text style={styles.markAllText}>Marcar todas</Text>
+                    </TouchableOpacity>
                 )}
-            />
+            </View>
+
+            {loading && notifications.length === 0 ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color={Colors.light.primary} />
+                </View>
+            ) : (
+                <FlatList
+                    data={notifications}
+                    keyExtractor={item => item.id}
+                    contentContainerStyle={styles.listContent}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={loading}
+                            onRefresh={fetchNotifications}
+                            tintColor={Colors.light.primary}
+                        />
+                    }
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Bell size={48} color="#D1D5DB" strokeWidth={1.5} />
+                            <Text style={styles.emptyText}>Nenhuma notificação nova</Text>
+                            <Text style={styles.emptySubtext}>Você receberá atualizações sobre seus pedidos aqui</Text>
+                        </View>
+                    }
+                    renderItem={({ item }) => (
+                        <TouchableOpacity
+                            style={[styles.item, !item.is_read && styles.unread]}
+                            onPress={() => !item.is_read && markAsRead(item.id)}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.iconContainer}>
+                                <Bell size={20} color={!item.is_read ? Colors.light.primary : '#9CA3AF'} />
+                            </View>
+                            <View style={styles.textContainer}>
+                                <Text style={styles.itemTitle}>{item.title}</Text>
+                                <Text style={styles.itemBody}>{item.message}</Text>
+                                <Text style={styles.itemTime}>{formatTime(item.created_at)}</Text>
+                            </View>
+                            {!item.is_read && <View style={styles.dot} />}
+                        </TouchableOpacity>
+                    )}
+                />
+            )}
         </SafeAreaView>
     );
 }
@@ -128,5 +172,45 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         backgroundColor: Colors.light.primary,
         marginTop: 6,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingBottom: 10,
+    },
+    markAllButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    markAllText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: Colors.light.primary,
+    },
+    loadingContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyContainer: {
+        alignItems: 'center',
+        paddingTop: 80,
+        paddingHorizontal: 40,
+    },
+    emptyText: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#374151',
+        marginTop: 16,
+        marginBottom: 8,
+    },
+    emptySubtext: {
+        fontSize: 14,
+        color: '#9CA3AF',
+        textAlign: 'center',
+        lineHeight: 20,
     },
 });

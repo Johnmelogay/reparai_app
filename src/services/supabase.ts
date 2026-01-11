@@ -1,17 +1,31 @@
 import { createClient } from '@supabase/supabase-js';
-import * as SecureStore from 'expo-secure-store';
 import 'react-native-url-polyfill/auto';
 
-const ExpoSecureStoreAdapter = {
-    getItem: (key: string) => {
-        return SecureStore.getItemAsync(key);
-    },
-    setItem: (key: string, value: string) => {
-        return SecureStore.setItemAsync(key, value);
-    },
-    removeItem: (key: string) => {
-        return SecureStore.deleteItemAsync(key);
-    },
+type StorageAdapter = {
+    getItem: (key: string) => Promise<string | null>;
+    setItem: (key: string, value: string) => Promise<void>;
+    removeItem: (key: string) => Promise<void>;
+};
+
+// SecureStore is a native module; fall back safely if the dev build isn't rebuilt yet.
+const SecureStore: { getItemAsync: (key: string) => Promise<string | null>; setItemAsync: (key: string, value: string) => Promise<void>; deleteItemAsync: (key: string) => Promise<void>; } | null = (() => {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        return require('expo-secure-store');
+    } catch {
+        return null;
+    }
+})();
+
+const memoryStore = new Map<string, string>();
+const ExpoSecureStoreAdapter: StorageAdapter = SecureStore ? {
+    getItem: (key: string) => SecureStore.getItemAsync(key),
+    setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
+    removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+} : {
+    getItem: async (key: string) => memoryStore.get(key) ?? null,
+    setItem: async (key: string, value: string) => { memoryStore.set(key, value); },
+    removeItem: async (key: string) => { memoryStore.delete(key); },
 };
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';

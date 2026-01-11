@@ -1,9 +1,11 @@
+import { GooglePlacesInput } from '@/components/GooglePlacesInput';
 import { Colors } from '@/constants/Colors';
 import { useLocation } from '@/context/LocationContext';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useGooglePlaces } from '@/hooks/useGooglePlaces';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Keyboard, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface MapPickerModalProps {
     visible: boolean;
@@ -22,14 +24,16 @@ interface MapPickerModalProps {
 }
 
 export function MapPickerModal({ visible, onClose, onConfirm, initialLocation }: MapPickerModalProps) {
-    const { selectedLocation } = useLocation();
+    const insets = useSafeAreaInsets();
+    const { selectedLocation, searchAddress } = useLocation();
+    const { searchPlaces, predictions, getPlaceDetails, reverseGeocode, isLoading: isPlacesLoading } = useGooglePlaces();
 
     const [selectedPosition, setSelectedPosition] = useState<{ lat: number; lng: number }>(
         initialLocation ||
         (selectedLocation ? { lat: selectedLocation.latitude, lng: selectedLocation.longitude } : null) ||
         { lat: -8.7612, lng: -63.9004 } // Porto Velho default
     );
-    const [isLoading, setIsLoading] = useState(false);
+
     const [previewAddress, setPreviewAddress] = useState<string>('Toque no mapa para definir o local');
     const [addressComponents, setAddressComponents] = useState<{
         street?: string;
@@ -40,79 +44,97 @@ export function MapPickerModal({ visible, onClose, onConfirm, initialLocation }:
     }>({});
     const [isGeocoding, setIsGeocoding] = useState(false);
 
+    // Manual Input State
+    const [isEditing, setIsEditing] = useState(false);
+
     // Initial reverse geocoding when modal opens
     useEffect(() => {
         if (visible) {
-            fetchAddressPreview(selectedPosition.lat, selectedPosition.lng);
+            handleReverseGeocode(selectedPosition.lat, selectedPosition.lng);
         }
     }, [visible]);
 
-    const fetchAddressPreview = async (lat: number, lng: number) => {
+    const handleReverseGeocode = async (lat: number, lng: number) => {
         setIsGeocoding(true);
-        try {
-            const response = await fetch(
-                `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-                {
-                    headers: {
-                        'User-Agent': 'RepairApp/1.0'
-                    }
-                }
-            );
-            const data = await response.json();
-            if (data && data.address) {
-                const addr = data.address;
-                const street = addr.road || addr.pedestrian || addr.path || '';
-                const neighborhood = addr.suburb || addr.neighbourhood || addr.quarter || '';
-                const num = addr.house_number || '';
-                const city = addr.city || addr.town || addr.municipality || '';
-                const state = addr.state || ''; // Nominatim often returns full state name, handle with care or use as is
-
-                setAddressComponents({ street, number: num, neighborhood, city, state });
-
-                // Format: "Rua X, 123 - Bairro"
-                let formatted = `${street}`;
-                if (num) formatted += `, ${num}`;
-                if (neighborhood) formatted += ` - ${neighborhood}`;
-                if (city) formatted += ` - ${city}`;
-
-                setPreviewAddress(formatted || 'Endereço não identificado');
-            } else {
-                setPreviewAddress('Endereço não encontrado');
-                setAddressComponents({});
-            }
-        } catch (error) {
-            setPreviewAddress('Endereço aproximado');
-        } finally {
-            setIsGeocoding(false);
+        const result = await reverseGeocode(lat, lng);
+        if (result) {
+            setPreviewAddress(result.address);
+            setAddressComponents({
+                street: result.street,
+                number: result.number,
+                neighborhood: result.neighborhood,
+                city: result.city,
+                state: result.state
+            });
+        } else {
+            setPreviewAddress('Endereço não encontrado');
+            setAddressComponents({});
         }
+        setIsGeocoding(false);
     };
 
     const handleMapPress = (event: any) => {
         const { latitude, longitude } = event.nativeEvent.coordinate;
         setSelectedPosition({ lat: latitude, lng: longitude });
-        fetchAddressPreview(latitude, longitude);
+        handleReverseGeocode(latitude, longitude);
+        setIsEditing(false); // Close edit mode if touching map
+        Keyboard.dismiss();
     };
 
-    const handleConfirm = async () => {
-        setIsLoading(true);
-        // Extract components from the preview logic if we can, or re-parse/store them. 
-        // Since we only stored the string 'previewAddress', we might want to store the raw components too or just re-fetch is overkill.
-        // Better: let's re-use the last fetched data if possible, but for now, let's just assume previewAddress is correct string and we might need to parse it or just pass nulls if we didn't save them.
-        // Actually, to fully satisfy the user request "fill fields corresponding", we should pass the components we got from Nominatim.
-        // Let's refactor `fetchAddressPreview` to store the raw components in a state.
+    const handlePredictionSelect = async (placeId: string, primaryText: string) => {
+        Keyboard.dismiss();
+        setIsEditing(false); // Temporarily close to show map moving? Or keep open? Let's close.
+        setIsGeocoding(true);
 
-        onConfirm({
-            lat: selectedPosition.lat,
-            lng: selectedPosition.lng,
-            address: previewAddress,
-            street: addressComponents.street,
-            number: addressComponents.number,
-            neighborhood: addressComponents.neighborhood,
-            city: addressComponents.city,
-            state: addressComponents.state
-        });
-        setIsLoading(false);
+        const details = await getPlaceDetails(placeId);
+
+        if (details && details.location) {
+            const { location, formattedAddress } = details;
+
+            // Extract some basic components if possible or just use formatted
+            // Note: Google Places "address_components" are returned if we asked for them.
+
+            const newPos = { lat: location.latitude, lng: location.longitude };
+            setSelectedPosition(newPos);
+            setPreviewAddress(formattedAddress);
+
+            // Re-fetch structured components via reverse geocode to ensure uniformity
+            handleReverseGeocode(location.latitude, location.longitude);
+
+        } else {
+            setPreviewAddress('Erro ao buscar detalhes do local');
+            setIsGeocoding(false);
+        }
+    };
+
+    const mapRef = useRef<MapView>(null);
+    useEffect(() => {
+        if (mapRef.current && selectedPosition) {
+            mapRef.current.animateToRegion({
+                latitude: selectedPosition.lat,
+                longitude: selectedPosition.lng,
+                latitudeDelta: 0.005,
+                longitudeDelta: 0.005,
+            }, 500);
+        }
+    }, [selectedPosition]);
+
+    const handleConfirm = () => {
+        // optimistically close first to avoid animation stutter/black screen
         onClose();
+
+        setTimeout(() => {
+            onConfirm({
+                lat: selectedPosition.lat,
+                lng: selectedPosition.lng,
+                address: previewAddress,
+                street: addressComponents.street,
+                number: addressComponents.number,
+                neighborhood: addressComponents.neighborhood,
+                city: addressComponents.city,
+                state: addressComponents.state
+            });
+        }, 200);
     };
 
     const initialRegion: Region = {
@@ -128,7 +150,7 @@ export function MapPickerModal({ visible, onClose, onConfirm, initialLocation }:
             animationType="slide"
             onRequestClose={onClose}
         >
-            <SafeAreaView style={styles.container} edges={['top']}>
+            <View style={[styles.container, { paddingTop: Math.max(insets.top, 20) }]}>
                 {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onClose}>
@@ -141,8 +163,9 @@ export function MapPickerModal({ visible, onClose, onConfirm, initialLocation }:
                 {/* Map */}
                 <View style={styles.mapContainer}>
                     <MapView
+                        ref={mapRef}
                         style={styles.map}
-                        provider={PROVIDER_GOOGLE}
+                        provider={Platform.OS === 'android' || Platform.OS === 'ios' ? PROVIDER_GOOGLE : undefined}
                         initialRegion={initialRegion}
                         onPress={handleMapPress}
                         showsUserLocation
@@ -157,44 +180,74 @@ export function MapPickerModal({ visible, onClose, onConfirm, initialLocation }:
                             onDragEnd={(e) => {
                                 const { latitude, longitude } = e.nativeEvent.coordinate;
                                 setSelectedPosition({ lat: latitude, lng: longitude });
-                                fetchAddressPreview(latitude, longitude);
+                                handleReverseGeocode(latitude, longitude);
                             }}
+                            tracksViewChanges={false} // Optimization: Stops constant re-rendering of the marker
                         >
-                            <Image
-                                source={require('../../../assets/images/wavinghuman.png')}
-                                style={{ width: 50, height: 50 }}
-                                resizeMode="contain"
-                            />
+                            <View style={{ width: 50, height: 50, justifyContent: 'center', alignItems: 'center' }}>
+                                <Image
+                                    source={require('../../../assets/images/wavinghuman.png')}
+                                    style={{ width: 50, height: 50 }}
+                                    resizeMode="contain"
+                                />
+                            </View>
                         </Marker>
                     </MapView>
 
-                    {/* Address Preview Card */}
+                    {/* Address Preview / Edit Card */}
                     <View style={styles.previewCard}>
                         <View style={styles.previewHeader}>
-                            <Text style={styles.previewLabel}>LOCAL SELECIONADO</Text>
+                            <Text style={styles.previewLabel}>
+                                {isEditing ? 'EDITAR ENDEREÇO' : 'LOCAL SELECIONADO'}
+                            </Text>
                             {isGeocoding && <ActivityIndicator size="small" color={Colors.light.primary} />}
+                            {!isGeocoding && !isEditing && (
+                                <TouchableOpacity onPress={() => {
+                                    setIsEditing(true);
+                                }}>
+                                    <Text style={styles.editLink}>Editar</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
-                        <Text style={styles.previewAddress} numberOfLines={2}>
-                            {previewAddress}
-                        </Text>
+
+                        {isEditing ? (
+                            <View style={styles.editContainer}>
+                                <GooglePlacesInput
+                                    initialValue={previewAddress}
+                                    onSelect={handlePredictionSelect}
+                                    placeholder="Digite o endereço..."
+                                />
+                                <View style={styles.editRowBtns}>
+                                    <TouchableOpacity
+                                        style={styles.cancelEditBtn}
+                                        onPress={() => setIsEditing(false)}
+                                    >
+                                        <Text style={styles.cancelEditText}>Cancelar</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        ) : (
+                            <TouchableOpacity onPress={() => {
+                                setIsEditing(true);
+                            }}>
+                                <Text style={styles.previewAddress} numberOfLines={2}>
+                                    {previewAddress}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 </View>
 
                 {/* Footer with Confirm Button */}
                 <View style={styles.footer}>
                     <TouchableOpacity
-                        style={[styles.confirmButton, isLoading && styles.confirmButtonDisabled]}
+                        style={styles.confirmButton}
                         onPress={handleConfirm}
-                        disabled={isLoading}
                     >
-                        {isLoading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={styles.confirmButtonText}>Confirmar Localização</Text>
-                        )}
+                        <Text style={styles.confirmButtonText}>Confirmar Localização</Text>
                     </TouchableOpacity>
                 </View>
-            </SafeAreaView>
+            </View>
         </Modal>
     );
 }
@@ -238,7 +291,7 @@ const styles = StyleSheet.create({
         right: 20,
         backgroundColor: '#fff',
         padding: 16,
-        borderRadius: 16,
+        borderRadius: 16, // Smoother rounded
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.15,
@@ -290,5 +343,30 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: '600',
+    },
+    // New Edit Styles
+    editLink: {
+        fontSize: 12,
+        color: Colors.light.primary,
+        fontWeight: '600',
+    },
+    editContainer: {
+        marginTop: 8,
+    },
+    // Removed old manualInput styles in favor of new component
+    editRowBtns: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        marginTop: 10,
+        gap: 10,
+    },
+    cancelEditBtn: {
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+    },
+    cancelEditText: {
+        fontSize: 13,
+        color: '#6B7280',
+        fontWeight: '500',
     },
 });

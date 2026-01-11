@@ -18,11 +18,20 @@ const R = 6371;
  * @returns Distance in kilometers
  */
 export const calculateDistance = (start: Coordinates, end: Coordinates): number => {
-    const dLat = (end.latitude - start.latitude) * (Math.PI / 180);
-    const dLon = (end.longitude - start.longitude) * (Math.PI / 180);
+    const lat1Val = parseFloat(String(start.latitude));
+    const lon1Val = parseFloat(String(start.longitude));
+    const lat2Val = parseFloat(String(end.latitude));
+    const lon2Val = parseFloat(String(end.longitude));
 
-    const lat1 = start.latitude * (Math.PI / 180);
-    const lat2 = end.latitude * (Math.PI / 180);
+    if (isNaN(lat1Val) || isNaN(lon1Val) || isNaN(lat2Val) || isNaN(lon2Val)) {
+        return 0;
+    }
+
+    const dLat = (lat2Val - lat1Val) * (Math.PI / 180);
+    const dLon = (lon2Val - lon1Val) * (Math.PI / 180);
+
+    const lat1 = lat1Val * (Math.PI / 180);
+    const lat2 = lat2Val * (Math.PI / 180);
 
     const a =
         Math.sin(dLat / 2) * Math.sin(dLat / 2) +

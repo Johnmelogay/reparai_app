@@ -44,6 +44,17 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
         }
     }, [visible]);
 
+    // Auto-detect login (OAuth or Email) -> Success
+    const { user } = useAuth();
+    useEffect(() => {
+        if (visible && user && step !== 'SUCCESS') {
+            setStep('SUCCESS');
+            setTimeout(() => {
+                onSuccess();
+            }, 1000);
+        }
+    }, [visible, user]);
+
     const handleOAuth = async (provider: 'google' | 'apple') => {
         setLoading(true);
         const { error } = provider === 'google' ? await signInWithGoogle() : await signInWithApple();
@@ -84,10 +95,8 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
         if (error) {
             Alert.alert("Código inválido", "Tente novamente.");
         } else if (session) {
+            // Context update will trigger the useEffect
             setStep('SUCCESS');
-            setTimeout(() => {
-                onSuccess();
-            }, 1000);
         }
     };
 

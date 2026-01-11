@@ -103,7 +103,8 @@ RETURNS TABLE (
     long DOUBLE PRECISION,
     is_online BOOLEAN,
     dist_km DOUBLE PRECISION,
-    hourly_rate NUMERIC
+    hourly_rate NUMERIC,
+    type TEXT
 )
 LANGUAGE plpgsql
 AS $$
@@ -122,7 +123,8 @@ BEGIN
             pa.location::geography,
             ST_SetSRID(ST_MakePoint(input_long, input_lat), 4326)::geography
         ) / 1000.0) AS dist_km,
-        pa.base_fee AS hourly_rate
+        pa.base_fee AS hourly_rate,
+        COALESCE(pa.type, 'MOBILE') AS type
     FROM 
         public.partners pa
     -- NO JOIN NEEDED ANYMORE!
