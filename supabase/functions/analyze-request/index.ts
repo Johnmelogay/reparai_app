@@ -2,6 +2,55 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+const clamp01 = (value: unknown, fallback: number = 0.5): number => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isNaN(parsed)) return fallback;
+    return Math.max(0, Math.min(1, parsed));
+};
+
+const isNonEmptyText = (value: unknown): boolean =>
+    typeof value === 'string' && value.trim().length > 0;
+
+const round4 = (value: number): number => Math.round(value * 10000) / 10000;
+
+function computeConfidence(aiJson: any, answers: Record<string, string>) {
+    const modelConfidence = clamp01(aiJson?.confidence, 0.5);
+    const answeredCount = Object.values(answers || {}).filter((v) => isNonEmptyText(v)).length;
+    const answerCoverage = Math.min(answeredCount / 5, 1);
+
+    const taxonomyCompleteness = [
+        isNonEmptyText(aiJson?.asset_type),
+        isNonEmptyText(aiJson?.service_type),
+        Array.isArray(aiJson?.issue_tags) && aiJson.issue_tags.length > 0,
+        isNonEmptyText(aiJson?.problem_guess),
+    ].filter(Boolean).length / 4;
+
+    const summaryLength = typeof aiJson?.summary_for_provider === 'string'
+        ? aiJson.summary_for_provider.trim().length
+        : 0;
+    const summaryQuality = summaryLength >= 24 ? 1 : summaryLength > 0 ? 0.5 : 0;
+
+    // Calibrated confidence:
+    // - model self-confidence is relevant but not enough
+    // - we require enough user answers and valid taxonomy fields
+    const finalConfidence =
+        (modelConfidence * 0.5) +
+        (answerCoverage * 0.25) +
+        (taxonomyCompleteness * 0.2) +
+        (summaryQuality * 0.05);
+
+    return {
+        confidence: round4(clamp01(finalConfidence, 0.45)),
+        factors: {
+            model_confidence: round4(modelConfidence),
+            answer_coverage: round4(answerCoverage),
+            taxonomy_completeness: round4(taxonomyCompleteness),
+            summary_quality: round4(summaryQuality),
+            answered_count: answeredCount,
+        }
+    };
+}
+
 Deno.serve(async (req) => {
     // CORS
     if (req.method === 'OPTIONS') {
@@ -110,6 +159,10 @@ Texto do Usuário: ${userText || 'N/A'}
         // Clean markdown if present
         const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
         const aiJson = JSON.parse(cleanContent);
+        const { confidence, factors } = computeConfidence(aiJson, answers || {});
+        aiJson.confidence_model = clamp01(aiJson.confidence, 0.5);
+        aiJson.confidence = confidence;
+        aiJson.confidence_factors = factors;
 
         // 3. Find Providers (GIS)
         let providers = [];

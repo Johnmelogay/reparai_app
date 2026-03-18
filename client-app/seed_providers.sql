@@ -1,0 +1,44 @@
+-- DEPRECATED
+-- ------------------------------------------------------------
+-- This project now uses ONLY real providers linked to auth.users.
+-- Do not seed random/mock providers.
+--
+-- If you need to bootstrap a real provider profile, use a real
+-- email account already present in auth.users and upsert by id.
+-- ------------------------------------------------------------
+
+-- Example (replace the email/category/location values):
+--
+-- WITH target_user AS (
+--   SELECT id
+--   FROM auth.users
+--   WHERE email = 'real.provider@example.com'
+--   LIMIT 1
+-- )
+-- INSERT INTO public.partners (
+--   id,
+--   full_name,
+--   user_type,
+--   service_category,
+--   is_online,
+--   location,
+--   type,
+--   base_fee
+-- )
+-- SELECT
+--   tu.id,
+--   'Nome Real do Prestador',
+--   'provider',
+--   'auto',
+--   false,
+--   ST_SetSRID(ST_MakePoint(-63.90177, -8.76183), 4326)::geography,
+--   'MOBILE',
+--   80
+-- FROM target_user tu
+-- ON CONFLICT (id) DO UPDATE
+-- SET
+--   full_name = EXCLUDED.full_name,
+--   service_category = EXCLUDED.service_category,
+--   location = EXCLUDED.location,
+--   type = EXCLUDED.type,
+--   base_fee = EXCLUDED.base_fee;
