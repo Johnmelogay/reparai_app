@@ -22,7 +22,7 @@ try {
     console.warn('⚠️ expo-notifications native module not available (Expo Go). Notifications disabled.');
 }
 
-interface NotificationContextType {
+export interface NotificationContextType {
     expoPushToken: string | null;
     notification: Notifications.Notification | null;
     badgeCount: number;
@@ -64,6 +64,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                     if (data.type === 'message') {
                         // @ts-ignore
                         router.push(`/chat/${data.requestId}`);
+                    } else if (data.type === 'job_request') {
+                        // @ts-ignore
+                        router.push({ pathname: '/jobDetail', params: { requestId: data.requestId } });
                     } else {
                         // @ts-ignore
                         router.push(`/ticket/${data.requestId}`);
@@ -78,14 +81,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             notificationListener.current?.remove();
             responseListener.current?.remove();
         };
-    }, []);
+    }, [router]);
 
     // Also listen for Supabase notifications table directly (Realtime fallback/primary for chat)
     useEffect(() => {
         if (!user) return;
 
         const channel = supabase
-            .channel(`user_notifications_${user.id}`)
+            .channel(`provider_notifications_${user.id}`)
             .on(
                 'postgres_changes',
                 {
@@ -95,7 +98,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                     filter: `user_id=eq.${user.id}`,
                 },
                 async (payload: any) => {
-                    console.log('🔔 New notification record:', payload.new);
+                    console.log('🔔 Provider: New notification record:', payload.new);
                     
                     if (!notificationsAvailable) return;
 
@@ -144,10 +147,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
 export const useNotifications = () => useContext(NotificationContext);
 
-async function registerForPushNotificationsAsync() {
+async function registerForPushNotificationsAsync(): Promise<string | null> {
     if (!notificationsAvailable) return null;
 
-    let token;
+    let token: string | null = null;
     try {
         if (Platform.OS === 'android') {
             await Notifications.setNotificationChannelAsync('default', {
@@ -165,7 +168,6 @@ async function registerForPushNotificationsAsync() {
             finalStatus = status;
         }
         if (finalStatus !== 'granted') {
-            process.env.NODE_ENV === 'development' && console.log('Failed to get push token for push notification!');
             return null;
         }
         

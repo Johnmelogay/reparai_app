@@ -19,10 +19,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 function statusLabel(status?: string): string {
-    if (status === 'accepted') return 'Pedido confirmado';
-    if (status === 'paid') return 'Pagamento confirmado';
+    if (status === 'accepted' || status === 'confirmed') return 'Pedido confirmado';
     if (status === 'en_route') return 'A caminho';
-    if (status === 'completed') return 'Concluído';
+    if (status === 'arrived') return 'No local';
+    if (status === 'quote_provided') return 'Orçamento enviado';
+    if (status === 'quote_accepted') return 'Em execução';
+    if (status === 'done' || status === 'completed') return 'Concluído';
+    if (status === 'canceled') return 'Cancelado';
     return 'Em atendimento';
 }
 
@@ -192,7 +195,7 @@ export default function ProviderChatRoomScreen() {
                         value={inputText}
                         onChangeText={setInputText}
                         style={[styles.input, !thread.canSend && styles.inputDisabled]}
-                        placeholder={thread.status === 'completed' ? 'Atendimento concluído. Chat encerrado.' : (thread.canSend ? 'Digite uma mensagem...' : 'O chat será liberado quando o pedido estiver com você')}
+                        placeholder={thread.status === 'done' ? 'Atendimento concluído. Chat encerrado.' : (thread.canSend ? 'Digite uma mensagem...' : 'O chat será liberado quando o pedido estiver com você')}
                         placeholderTextColor="#9CA3AF"
                         editable={thread.canSend && !sending}
                         multiline

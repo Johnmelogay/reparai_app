@@ -11,21 +11,18 @@ import { Button } from '@/components/ui/Button';
 import { Colors } from '@/constants/Colors';
 import { useRequest } from '@/context/RequestContext';
 import { supabase } from '@/services/supabase';
-import { Provider } from '@/types';
+import { PartnerHighlight, Provider } from '@/types';
+import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronRight, Heart, Search, ShieldCheck, Star, Ticket, X, Zap } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, Image, ImageBackground, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, ImageBackground, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
-// Mock data for "Destaques" until we have real services
-const MOCK_HIGHLIGHTS = [
-    { id: '1', title: 'Manutenção Padrão', price: 'R$ 150,00', originalPrice: 'R$ 180,00', image: 'https://images.unsplash.com/photo-1581092921461-eab62e97a783?q=80&w=2070&auto=format&fit=crop' },
-    { id: '2', title: 'Visita Técnica', price: 'R$ 80,00', originalPrice: null, image: 'https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?q=80&w=2070&auto=format&fit=crop' },
-    { id: '3', title: 'Limpeza Profunda', price: 'R$ 200,00', originalPrice: 'R$ 250,00', image: 'https://images.unsplash.com/photo-1527513913476-37b003a3d58e?q=80&w=1935&auto=format&fit=crop' },
-];
+const formatBRL = (value: number) =>
+    `R$ ${value.toFixed(2).replace('.', ',')}`;
 
 export default function ProviderDetailScreen() {
     const { id } = useLocalSearchParams();
@@ -34,6 +31,22 @@ export default function ProviderDetailScreen() {
     const [loading, setLoading] = useState(true);
     const { canSeeContact, currentTicket } = useRequest();
     const insets = useSafeAreaInsets();
+
+    // Fetch highlights for this provider
+    const { data: highlights = [] } = useQuery<PartnerHighlight[]>({
+        queryKey: ['partner_highlights', id],
+        queryFn: async () => {
+            const { data, error } = await supabase
+                .from('partner_highlights')
+                .select('*')
+                .eq('partner_id', id)
+                .eq('is_active', true)
+                .order('sort_order', { ascending: true });
+            if (error) throw error;
+            return data ?? [];
+        },
+        enabled: !!id,
+    });
 
     useEffect(() => {
         const fetchProvider = async () => {
@@ -45,23 +58,26 @@ export default function ProviderDetailScreen() {
                 .single();
 
             if (data) {
+                const badges: string[] = data.badges?.length ? data.badges : [];
                 setProvider({
                     id: data.id,
                     name: data.full_name || 'Prestador',
                     image: data.avatar_url,
                     rating: data.rating || 5.0,
-                    reviews: 220, // Mocked to match reference roughly
+                    reviews: 0,
                     category: data.service_category,
                     categories: [data.service_category],
                     visitPrice: data.base_fee,
-                    distance: '0.9 km', // Mocked to match reference, or use calculated if passed via params
+                    distance: '0.9 km',
                     coordinates: { latitude: 0, longitude: 0 },
                     status: data.is_online ? 'online' : 'offline',
-                    badges: ['Super'], // Mocked 'Super' badge
-                    address: 'Endereço do Prestador',
+                    badges: badges as any,
+                    address: data.address_display || 'Endereço do Prestador',
+                    description: data.description || undefined,
                     operationalScore: 100,
-                    whatsapp: '5569999999999'
-                });
+                    whatsapp: '5569999999999',
+                    _bannerUrl: data.banner_url,
+                } as any);
             }
             setLoading(false);
         };
@@ -87,7 +103,7 @@ export default function ProviderDetailScreen() {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
                 {/* Banner Header */}
                 <ImageBackground
-                    source={{ uri: 'https://images.unsplash.com/photo-1556910103-1c02745a30bf?q=80&w=2070&auto=format&fit=crop' }}
+                    source={{ uri: (provider as any)._bannerUrl || 'https://images.unsplash.com/photo-1556910103-1c02745a30bf?q=80&w=2070&auto=format&fit=crop' }}
                     style={styles.banner}
                 >
                     {/* Dark Overlay for icon visibility */}
@@ -166,31 +182,58 @@ export default function ProviderDetailScreen() {
                 </View>
 
                 {/* Highlights Section */}
-                <View style={styles.sectionContainer}>
-                    <Text style={styles.sectionTitle}>Destaques</Text>
-                    <FlatList
-                        data={MOCK_HIGHLIGHTS}
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
-                        keyExtractor={item => item.id}
-                        renderItem={({ item }) => (
-                            <TouchableOpacity style={styles.highlightCard}>
-                                <Image source={{ uri: item.image }} style={styles.highlightImage} />
-                                <View style={styles.highlightContent}>
-                                    <View style={styles.priceRow}>
-                                        <Text style={styles.price}>{item.price}</Text>
-                                        {item.originalPrice && (
-                                            <Text style={styles.originalPrice}>{item.originalPrice}</Text>
-                                        )}
+                {highlights.length > 0 && (
+                    <View style={styles.sectionContainer}>
+                        <Text style={styles.sectionTitle}>Destaques</Text>
+                        <FlatList
+                            data={highlights}
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
+                            keyExtractor={item => item.id}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={styles.highlightCard}
+                                    onPress={() => {
+                                        Alert.alert('Serviço de Destaque', 'Para solicitar este serviço com orçamento no local, faça um pedido na tela inicial.');
+                                        /* Temporarily disabled during MVP quote lifecycle pilot:
+                                        router.push({
+                                            pathname: '/provider/highlight-checkout',
+                                            params: {
+                                                highlightId: item.id,
+                                                providerId: provider!.id,
+                                                providerName: provider!.name,
+                                                serviceName: item.name,
+                                                servicePrice: String(item.price),
+                                                displacementFee: String(provider!.visitPrice || 0),
+                                                imageUrl: item.image_url || '',
+                                            },
+                                        });
+                                        */
+                                    }}
+                                >
+                                    {item.image_url ? (
+                                        <Image source={{ uri: item.image_url }} style={styles.highlightImage} />
+                                    ) : (
+                                        <View style={[styles.highlightImage, { backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }]}>
+                                            <Star size={20} color="#CBD5E1" />
+                                        </View>
+                                    )}
+                                    <View style={styles.highlightContent}>
+                                        <View style={styles.priceRow}>
+                                            <Text style={styles.price}>{formatBRL(item.price)}</Text>
+                                            {item.original_price != null && (
+                                                <Text style={styles.originalPrice}>{formatBRL(item.original_price)}</Text>
+                                            )}
+                                        </View>
+                                        <Text style={styles.highlightTitle} numberOfLines={2}>{item.name}</Text>
+                                        <Text style={styles.brandTitle} numberOfLines={1}>{provider.name}</Text>
                                     </View>
-                                    <Text style={styles.highlightTitle} numberOfLines={2}>{item.title}</Text>
-                                    <Text style={styles.brandTitle} numberOfLines={1}>{provider.name}</Text>
-                                </View>
-                            </TouchableOpacity>
-                        )}
-                    />
-                </View>
+                                </TouchableOpacity>
+                            )}
+                        />
+                    </View>
+                )}
 
                 {/* About / Description */}
                 <View style={[styles.sectionContainer, { paddingHorizontal: 20 }]}>

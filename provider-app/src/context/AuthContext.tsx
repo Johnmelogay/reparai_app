@@ -124,8 +124,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 email,
                 options: { shouldCreateUser: true },
             });
-            return { error };
-        } catch (error) {
+
+            if (error) {
+                const isRateLimit = error.message?.toLowerCase().includes('rate limit') ||
+                    (error as any)?.code === 'over_email_send_rate_limit' ||
+                    (error as any)?.status === 429;
+
+                let friendlyMessage = error.message;
+                if (isRateLimit) {
+                    const retryAfter = (error as any)?.retry_after || (error as any)?.retryAfter;
+                    if (typeof retryAfter === 'number' && retryAfter > 0) {
+                        friendlyMessage = `Limite de envio atingido. Aguarde ${retryAfter} segundos antes de tentar novamente.`;
+                    } else {
+                        friendlyMessage = 'O limite temporário de envio de e-mails foi atingido. Tente novamente mais tarde.';
+                    }
+                }
+
+                return { error: { ...error, message: friendlyMessage } };
+            }
+
+            return { error: null };
+        } catch (error: any) {
             return { error };
         }
     };

@@ -83,29 +83,43 @@ export default function InteractiveFormScreen() {
         }).start();
     }, [currentStep, questions.length]);
 
+    const [isProcessingStep, setIsProcessingStep] = useState(false);
+
     const handleAnswer = async (value: string) => {
+        if (isProcessingStep) return;
         if (value === 'other') {
             setShowCustomInput(true);
             return;
         }
 
-        const currentQ = questions[currentStep];
-        setFunnelAnswer(currentQ.id, value);
+        setIsProcessingStep(true);
+        try {
+            const currentQ = questions[currentStep];
+            if (!currentQ) return;
+            setFunnelAnswer(currentQ.id, value);
 
-        // Pre-calculate the new answers state to avoid race condition
-        const updatedAnswers = { ...funnelAnswers, [currentQ.id]: value };
+            // Pre-calculate the new answers state to avoid race condition
+            const updatedAnswers = { ...funnelAnswers, [currentQ.id]: value };
 
-        // Check if this is the last question in current list
-        const isLastQuestion = currentStep >= questions.length - 1;
+            // Check if this is the last question in current list
+            const isLastQuestion = currentStep >= questions.length - 1;
 
-        if (!isLastQuestion) {
-            // Not the last question -> just advance
-            setTimeout(() => setCurrentStep(prev => prev + 1), 300);
-        } else {
-            // Last question -> fetch AI for more questions, then advance
-            await fetchAiQuestions(updatedAnswers);
-            // After AI returns, advance to the newly added question
-            setTimeout(() => setCurrentStep(prev => prev + 1), 300);
+            if (!isLastQuestion) {
+                // Not the last question -> just advance
+                setTimeout(() => {
+                    setCurrentStep(prev => prev + 1);
+                    setIsProcessingStep(false);
+                }, 300);
+            } else {
+                // Last question -> fetch AI for more questions, then advance
+                await fetchAiQuestions(updatedAnswers);
+                setTimeout(() => {
+                    setCurrentStep(prev => prev + 1);
+                    setIsProcessingStep(false);
+                }, 300);
+            }
+        } catch {
+            setIsProcessingStep(false);
         }
     };
 
@@ -126,12 +140,23 @@ export default function InteractiveFormScreen() {
         setIsLoadingAI(true);
         try {
             const effectiveAnswers = currentAnswersOverride || funnelAnswers;
-            const { questions: newQs, confidence } = await aiService.generateQuestions(
+            
+            // AI Fallback: 4000ms timeout
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('AI_TIMEOUT')), 4000);
+            });
+
+            const fetchPromise = aiService.generateQuestions(
                 categoryId,
                 effectiveAnswers,
                 description,
                 CONFIDENCE_THRESHOLD
             );
+
+            const { questions: newQs, confidence } = await Promise.race([
+                fetchPromise,
+                timeoutPromise
+            ]) as any;
 
             // Store the latest confidence (local and global context)
             setCurrentConfidence(confidence);
@@ -157,9 +182,9 @@ export default function InteractiveFormScreen() {
             if (newQs && newQs.length > 0) {
                 // Filter out questions where the TEXT is identical to what we already have.
                 // If the ID is the same but text is different, we accept it and PATCH the id.
-                uniqueNew = newQs.filter(nq =>
+                uniqueNew = (newQs as DiagnosticQuestion[]).filter((nq: DiagnosticQuestion) =>
                     !questions.some(eq => eq.text.toLowerCase() === nq.text.toLowerCase())
-                ).map(nq => {
+                ).map((nq: DiagnosticQuestion) => {
                     // Check if ID collision exists
                     if (questions.some(eq => eq.id === nq.id)) {
                         return { ...nq, id: `${nq.id}_${Date.now()}` };
@@ -170,55 +195,42 @@ export default function InteractiveFormScreen() {
 
             if (uniqueNew.length > 0) {
                 setQuestions(prev => [...prev, ...uniqueNew]);
-                // Don't advance here - let handleAnswer control the step advancement
             } else {
-                // No new questions generated and confidence is low
-                // Force finish instead of showing fallback error
-                console.log('AI stuck with low confidence, forcing finish');
+                // No new questions generated
                 finishFunnel();
             }
 
-        } catch (e) {
-            console.error(e);
-            Alert.alert("Erro", "Falha ao analisar diagnóstico. Tente novamente.");
-            // Do not finishFunnel on error to prevent bad requests
+        } catch (e: any) {
+            Alert.alert(
+                "Diagnóstico",
+                "Deseja tentar gerar novas perguntas ou prosseguir com a descrição informada?",
+                [
+                    {
+                        text: "Tentar novamente",
+                        onPress: () => fetchAiQuestions(currentAnswersOverride)
+                    },
+                    {
+                        text: "Continuar",
+                        onPress: () => finishFunnel()
+                    }
+                ]
+            );
         } finally {
             setIsLoadingAI(false);
         }
     };
 
-    const finishFunnel = async () => {
-        setIsLoadingAI(true); // Show analyzing spinner
-        try {
-            // PRE-ANALYSIS: Ensure we have the summary BEFORE going to details/match
-            const analysis = await aiService.analyzeRequest({
-                requestId: 'temp-draft', // ID is generated later
-                category: categoryId,
-                answers: funnelAnswers,
-                userText: description,
-                lat: 0,
-                lng: 0
-            });
+    const handleSkip = () => {
+        // Bypass the AI entirely
+        finishFunnel();
+    };
 
-            if (analysis) {
-                setAiResult(analysis.analysis);
-            }
-
-            router.push({
-                pathname: '/request/new/details',
-                params: { category: categoryId }
-            });
-
-        } catch (e) {
-            console.error("Final analysis failed", e);
-            // Proceed anyway
-            router.push({
-                pathname: '/request/new/details',
-                params: { category: categoryId }
-            });
-        } finally {
-            setIsLoadingAI(false);
-        }
+    const finishFunnel = () => {
+        // Navigate directly to details — analysis occurs once post-submission with real requestId & GPS
+        router.push({
+            pathname: '/request/new/details',
+            params: { category: categoryId }
+        });
     };
 
     const handleBack = () => {
@@ -302,8 +314,8 @@ export default function InteractiveFormScreen() {
                         {isLoadingAI ? 'Analisando...' : `Pergunta ${currentStep + 1} de ${MAX_QUESTIONS}`}
                     </Text>
                 </View>
-                <TouchableOpacity onPress={() => router.push('/')} style={styles.closeBtn}>
-                    <X size={24} color="#999" />
+                <TouchableOpacity onPress={handleSkip} style={styles.closeBtn}>
+                    <Text style={{ fontSize: 16, color: '#999', fontWeight: 'bold' }}>Pular</Text>
                 </TouchableOpacity>
             </View>
 

@@ -53,11 +53,11 @@ export default function RequestsScreen() {
     const router = useRouter();
     const { isGuest } = useAuth();
     const [showAuth, setShowAuth] = useState(false);
-    const [filter, setFilter] = useState<'Active' | 'History'>('Active');
+    const [filter, setFilter] = useState<'Active' | 'Done' | 'Canceled'>('Active');
 
-    const { activeRequests, historyRequests, loading, error, refetch } = useMyRequests();
+    const { activeRequests = [], doneRequests = [], canceledRequests = [], loading, error, refetch } = useMyRequests();
 
-    const filteredData = filter === 'Active' ? activeRequests : historyRequests;
+    const filteredData = filter === 'Active' ? activeRequests : filter === 'Done' ? doneRequests : canceledRequests;
 
     const renderItem = ({ item }: { item: MyRequest }) => {
         const status = mapStatus(item.status);
@@ -146,15 +146,23 @@ export default function RequestsScreen() {
                     onPress={() => setFilter('Active')}
                 >
                     <Text style={[styles.segmentText, filter === 'Active' && styles.segmentTextActive]}>
-                        Em Andamento{activeRequests.length > 0 ? ` (${activeRequests.length})` : ''}
+                        Andamento{activeRequests.length > 0 ? ` (${activeRequests.length})` : ''}
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                    style={[styles.segmentBtn, filter === 'History' && styles.segmentBtnActive]}
-                    onPress={() => setFilter('History')}
+                    style={[styles.segmentBtn, filter === 'Done' && styles.segmentBtnActive]}
+                    onPress={() => setFilter('Done')}
                 >
-                    <Text style={[styles.segmentText, filter === 'History' && styles.segmentTextActive]}>
-                        Histórico{historyRequests.length > 0 ? ` (${historyRequests.length})` : ''}
+                    <Text style={[styles.segmentText, filter === 'Done' && styles.segmentTextActive]}>
+                        Finalizados{doneRequests.length > 0 ? ` (${doneRequests.length})` : ''}
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, filter === 'Canceled' && styles.segmentBtnActive]}
+                    onPress={() => setFilter('Canceled')}
+                >
+                    <Text style={[styles.segmentText, filter === 'Canceled' && styles.segmentTextActive]}>
+                        Cancelados{canceledRequests.length > 0 ? ` (${canceledRequests.length})` : ''}
                     </Text>
                 </TouchableOpacity>
             </View>
@@ -199,12 +207,12 @@ export default function RequestsScreen() {
                             <Text style={styles.emptyTitle}>
                                 {filter === 'Active'
                                     ? 'Nenhum pedido em andamento'
-                                    : 'Nenhum histórico encontrado'}
+                                    : filter === 'Done' ? 'Nenhum pedido finalizado' : 'Nenhum pedido cancelado'}
                             </Text>
                             <Text style={styles.emptySubtitle}>
                                 {filter === 'Active'
                                     ? 'Quando você abrir um chamado, ele aparecerá aqui.'
-                                    : 'Seus pedidos concluídos ou cancelados aparecerão aqui.'}
+                                    : 'Acompanhe seu status usando as outras categorias.'}
                             </Text>
                         </View>
                     }

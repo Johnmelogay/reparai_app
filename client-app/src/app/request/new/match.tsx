@@ -38,8 +38,7 @@ const DEFAULT_REGION = {
 const getStatusHeadline = (status: string, hasProvider: boolean): string => {
     if (status === 'offered') return 'Profissionais interessados';
     if (status === 'accepted' && !hasProvider) return 'Profissionais aceitaram seu pedido';
-    if (status === 'accepted') return 'Pedido confirmado';
-    if (status === 'paid') return 'Pedido confirmado';
+    if (status === 'accepted' || status === 'confirmed') return 'Pedido confirmado';
     if (status === 'en_route') return 'Profissional a caminho';
     return 'Acompanhando pedido';
 };
@@ -47,8 +46,7 @@ const getStatusHeadline = (status: string, hasProvider: boolean): string => {
 const getStatusGuidance = (status: string, providerName?: string): string => {
     const safeProvider = providerName || 'O prestador';
     if (status === 'offered') return 'Compare as ofertas e escolha o melhor profissional para avançar.';
-    if (status === 'accepted') return `${safeProvider} foi confirmado. Abra o chat para alinhar detalhes e agendamento.`;
-    if (status === 'paid') return `${safeProvider} deve entrar em contato em breve. Toque em "Abrir chat" para iniciar a conversa.`;
+    if (status === 'accepted' || status === 'confirmed') return `${safeProvider} foi confirmado. Abra o chat para alinhar detalhes e agendamento.`;
     if (status === 'en_route') return `${safeProvider} está em deslocamento. Use o chat para alinhar referência e chegada.`;
     return 'Acompanhe os próximos passos do seu atendimento nesta tela.';
 };
@@ -428,7 +426,7 @@ export default function RequestMatchScreen() {
         const hasOffers = offerCandidates.length > 0;
         const shouldShowSheet =
             (hasOffers && !assignedProvider) ||
-            ((status === 'offered' || status === 'accepted' || status === 'paid' || status === 'en_route') && !!assignedProvider);
+            ((status === 'offered' || status === 'accepted' || status === 'confirmed' || status === 'en_route') && !!assignedProvider);
 
         if (shouldShowSheet) {
             console.log('📦 Showing bottom sheet. Context status:', status, 'Offers count:', offerCandidates.length);
@@ -785,7 +783,7 @@ export default function RequestMatchScreen() {
             )}
 
             {/* Found Card Slide Up */}
-            {(status === 'offered' || status === 'accepted' || status === 'paid' || status === 'en_route') && (
+            {(status === 'offered' || status === 'accepted' || status === 'confirmed' || status === 'en_route') && (
                 <Animated.View
                     style={[
                         styles.bottomSheet,
@@ -868,7 +866,7 @@ export default function RequestMatchScreen() {
                     )}
 
                     {/* Provider hero — centered layout for assigned provider */}
-                    {assignedProvider && (status === 'accepted' || status === 'paid' || status === 'en_route') && (
+                    {assignedProvider && (status === 'accepted' || status === 'confirmed' || status === 'en_route') && (
                         <>
                             <View style={styles.statusBadge}>
                                 <CheckCircle size={14} color={Colors.light.success} />

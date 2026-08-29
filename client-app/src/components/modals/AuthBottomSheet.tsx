@@ -55,22 +55,34 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
         }
     }, [visible, user]);
 
+    const [resendCooldown, setResendCooldown] = useState(0);
+
+    // Cooldown countdown timer
+    useEffect(() => {
+        if (resendCooldown <= 0) return;
+        const timer = setInterval(() => {
+            setResendCooldown(prev => Math.max(0, prev - 1));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [resendCooldown]);
+
     const handleOAuth = async (provider: 'google' | 'apple') => {
+        if (loading) return;
         setLoading(true);
         const { error } = provider === 'google' ? await signInWithGoogle() : await signInWithApple();
-        // Note: OAuth flow finishes when deep link returns, handled by Context.
-        // We might want to close modal if successful, but usually the app reloads state.
         setLoading(false);
         if (error) Alert.alert("Erro no login", error.message);
-        else {
-            // We can assume if no error, the browser opened.
-            // The success callback depends on AuthContext updating session.
-        }
     };
 
-    const handleSendEmailCode = async () => {
+    const handleSendEmailCode = async (isResend: boolean = false) => {
+        if (loading) return;
         if (!email.includes('@')) {
-            Alert.alert("Erro", "E-mail inválido.");
+            Alert.alert("Atenção", "Por favor, insira um e-mail válido.");
+            return;
+        }
+
+        if (isResend && resendCooldown > 0) {
+            Alert.alert("Aguarde", `Aguarde ${resendCooldown}s para reenviar o código.`);
             return;
         }
 
@@ -79,23 +91,27 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
         setLoading(false);
 
         if (error) {
-            Alert.alert("Erro", error.message);
+            Alert.alert("Erro no Envio", error.message);
         } else {
-            setStep('EMAIL_OTP');
+            setResendCooldown(60);
+            if (!isResend) {
+                setStep('EMAIL_OTP');
+            } else {
+                Alert.alert("Código Enviado", `Um novo código de 6 dígitos foi enviado para ${email}.`);
+            }
         }
     };
 
     const handleVerifyOtp = async () => {
-        if (otp.length < 6) return;
+        if (loading || otp.length < 6) return;
 
         setLoading(true);
         const { error, session } = await verifyEmailOtp(email, otp);
         setLoading(false);
 
         if (error) {
-            Alert.alert("Código inválido", "Tente novamente.");
+            Alert.alert("Código inválido", "Verifique o código de 6 dígitos e tente novamente.");
         } else if (session) {
-            // Context update will trigger the useEffect
             setStep('SUCCESS');
         }
     };
@@ -114,16 +130,16 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
                         <TouchableOpacity
                             style={[styles.oauthBtn, { backgroundColor: '#000' }]}
                             onPress={() => handleOAuth('apple')}
+                            disabled={loading}
                         >
-                            {/* Apple Icon placeholder or text */}
                             <Text style={[styles.btnText, { color: '#fff' }]}> Continuar com Apple</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             style={[styles.oauthBtn, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd' }]}
                             onPress={() => handleOAuth('google')}
+                            disabled={loading}
                         >
-                            {/* Google Icon placeholder or text */}
                             <Text style={[styles.btnText, { color: '#333' }]}>G  Continuar com Google</Text>
                         </TouchableOpacity>
 
@@ -142,12 +158,13 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
                                 autoCapitalize="none"
                                 value={email}
                                 onChangeText={setEmail}
+                                editable={!loading}
                             />
                         </View>
 
                         <TouchableOpacity
-                            style={[styles.primaryBtn, loading && styles.disabledBtn]}
-                            onPress={handleSendEmailCode}
+                            style={[styles.primaryBtn, (loading || !email) && styles.disabledBtn]}
+                            onPress={() => handleSendEmailCode(false)}
                             disabled={loading || !email}
                         >
                             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Continuar com E-mail</Text>}
@@ -176,6 +193,7 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
                                 value={otp}
                                 onChangeText={setOtp}
                                 autoFocus
+                                editable={!loading}
                             />
                         </View>
 
@@ -185,6 +203,16 @@ export function AuthBottomSheet({ visible, onClose, onSuccess }: AuthBottomSheet
                             disabled={loading || otp.length < 6}
                         >
                             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Confirmar Código</Text>}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={{ marginTop: 16, alignItems: 'center' }}
+                            onPress={() => handleSendEmailCode(true)}
+                            disabled={loading || resendCooldown > 0}
+                        >
+                            <Text style={{ color: resendCooldown > 0 ? '#999' : Colors.light.primary, fontWeight: '600' }}>
+                                {resendCooldown > 0 ? `Reenviar código em ${resendCooldown}s` : 'Reenviar código'}
+                            </Text>
                         </TouchableOpacity>
                     </>
                 );

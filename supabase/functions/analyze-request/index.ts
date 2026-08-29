@@ -2,57 +2,113 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const clamp01 = (value: unknown, fallback: number = 0.5): number => {
-    const parsed = typeof value === 'number' ? value : Number(value);
-    if (Number.isNaN(parsed)) return fallback;
-    return Math.max(0, Math.min(1, parsed));
-};
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const isNonEmptyText = (value: unknown): boolean =>
-    typeof value === 'string' && value.trim().length > 0;
+interface TaxonomyAnalysis {
+    domain: string;
+    asset_type: string;
+    service_type: string;
+    issue_tags: string[];
+    problem_guess: string;
+    confidence: number;
+    summary_for_provider: string;
+    source: "gemini" | "deterministic_fallback";
+    degraded: boolean;
+}
 
-const round4 = (value: number): number => Math.round(value * 10000) / 10000;
+function getDeterministicTaxonomy(category: string, answers: Record<string, string> = {}, userText: string = ''): TaxonomyAnalysis {
+    const domain = (category || 'mobilidade').toLowerCase();
+    const allText = `${Object.values(answers || {}).join(' ')} ${userText}`.toLowerCase();
 
-function computeConfidence(aiJson: any, answers: Record<string, string>) {
-    const modelConfidence = clamp01(aiJson?.confidence, 0.5);
-    const answeredCount = Object.values(answers || {}).filter((v) => isNonEmptyText(v)).length;
-    const answerCoverage = Math.min(answeredCount / 5, 1);
+    let asset_type = 'veiculo';
+    let service_type = 'mecanica';
+    const issue_tags: string[] = [];
 
-    const taxonomyCompleteness = [
-        isNonEmptyText(aiJson?.asset_type),
-        isNonEmptyText(aiJson?.service_type),
-        Array.isArray(aiJson?.issue_tags) && aiJson.issue_tags.length > 0,
-        isNonEmptyText(aiJson?.problem_guess),
-    ].filter(Boolean).length / 4;
+    if (domain.includes('mobilidade')) {
+        if (allText.includes('moto')) asset_type = 'moto';
+        else if (allText.includes('bicicleta') || allText.includes('bike')) asset_type = 'bicicleta';
+        else if (allText.includes('patinete')) asset_type = 'patinete';
+        else asset_type = 'carro';
 
-    const summaryLength = typeof aiJson?.summary_for_provider === 'string'
-        ? aiJson.summary_for_provider.trim().length
-        : 0;
-    const summaryQuality = summaryLength >= 24 ? 1 : summaryLength > 0 ? 0.5 : 0;
+        if (allText.includes('bateria') || allText.includes('eletric') || allText.includes('luz')) {
+            service_type = 'eletrica';
+            issue_tags.push('eletrica', 'bateria');
+        } else if (allText.includes('freio') || allText.includes('pneu') || allText.includes('roda')) {
+            service_type = 'freios';
+            issue_tags.push('freios', 'suspensao');
+        } else if (allText.includes('ar') || allText.includes('clima')) {
+            service_type = 'ar_condicionado';
+            issue_tags.push('ar_condicionado');
+        } else {
+            service_type = 'mecanica';
+            issue_tags.push('motor', 'mecanica');
+        }
+    } else if (domain.includes('casa')) {
+        if (allText.includes('ar') || allText.includes('split')) asset_type = 'ar_condicionado';
+        else if (allText.includes('geladeira') || allText.includes('freezer')) asset_type = 'geladeira';
+        else if (allText.includes('lavar') || allText.includes('maquina')) asset_type = 'maquina_lavar';
+        else if (allText.includes('pia') || allText.includes('cano') || allText.includes('vazamento')) asset_type = 'encanamento';
+        else asset_type = 'instalacao';
 
-    // Calibrated confidence:
-    // - model self-confidence is relevant but not enough
-    // - we require enough user answers and valid taxonomy fields
-    const finalConfidence =
-        (modelConfidence * 0.5) +
-        (answerCoverage * 0.25) +
-        (taxonomyCompleteness * 0.2) +
-        (summaryQuality * 0.05);
+        if (allText.includes('vazamento') || allText.includes('agua')) {
+            service_type = 'hidraulica';
+            issue_tags.push('vazamento', 'agua');
+        } else if (allText.includes('curto') || allText.includes('tomada') || allText.includes('disjuntor')) {
+            service_type = 'eletrica';
+            issue_tags.push('eletrica', 'curto');
+        } else {
+            service_type = 'manutencao';
+            issue_tags.push('conserto', 'geral');
+        }
+    } else {
+        // Tecnologia
+        if (allText.includes('celular') || allText.includes('smartphone') || allText.includes('iphone')) asset_type = 'celular';
+        else if (allText.includes('notebook') || allText.includes('computador') || allText.includes('pc')) asset_type = 'computador';
+        else if (allText.includes('tv') || allText.includes('televis')) asset_type = 'tv';
+        else asset_type = 'dispositivo';
+
+        if (allText.includes('tela') || allText.includes('display')) {
+            service_type = 'hardware';
+            issue_tags.push('tela', 'troca_display');
+        } else if (allText.includes('bateria') || allText.includes('carreg')) {
+            service_type = 'bateria';
+            issue_tags.push('bateria', 'alimentacao');
+        } else {
+            service_type = 'reparo';
+            issue_tags.push('eletronica', 'conserto');
+        }
+    }
+
+    const problem_guess = userText ? userText.slice(0, 40) : `Reparo em ${asset_type}`;
+    const summary_for_provider = `Cliente solicita atendimento para ${asset_type} (${service_type}). Sintomas informados: ${userText || 'Verificar no local'}.`;
 
     return {
-        confidence: round4(clamp01(finalConfidence, 0.45)),
-        factors: {
-            model_confidence: round4(modelConfidence),
-            answer_coverage: round4(answerCoverage),
-            taxonomy_completeness: round4(taxonomyCompleteness),
-            summary_quality: round4(summaryQuality),
-            answered_count: answeredCount,
-        }
+        domain: domain,
+        asset_type: asset_type,
+        service_type: service_type,
+        issue_tags: issue_tags,
+        problem_guess: problem_guess,
+        confidence: 0.88,
+        summary_for_provider: summary_for_provider.slice(0, 200),
+        source: "deterministic_fallback",
+        degraded: true
     };
 }
 
+const jsonResponse = (data: any, status: number = 200) => {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: {
+            "Content-Type": "application/json",
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+        }
+    });
+};
+
 Deno.serve(async (req) => {
-    // CORS
+    // CORS Preflight
     if (req.method === 'OPTIONS') {
         return new Response('ok', {
             headers: {
@@ -63,154 +119,199 @@ Deno.serve(async (req) => {
         });
     }
 
+    if (req.method !== 'POST') {
+        return jsonResponse({ error: 'method_not_allowed' }, 405);
+    }
+
     try {
-        const { requestId, category, answers, userText, lat, lng } = await req.json();
-
-        // category now contains the domain slug (mobilidade, casa, tecnologia)
-        const domain = category;
-
-        // 1. Setup Clients
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-        if (!supabaseUrl || !supabaseKey) {
-            throw new Error("Missing Supabase configuration");
+        if (!supabaseUrl || !supabaseServiceKey) {
+            console.error("Missing Supabase configuration in environment");
+            return jsonResponse({ error: "server_misconfiguration" }, 500);
         }
 
-        const supabase = createClient(supabaseUrl, supabaseKey);
+        // 1. Authenticate user from JWT
+        const authHeader = req.headers.get('Authorization') || '';
+        if (!authHeader.startsWith('Bearer ')) {
+            return jsonResponse({ error: "unauthorized", message: "Missing or invalid Authorization header" }, 401);
+        }
 
-        const apiKey = Deno.env.get("GEMINI_API_KEY");
-        if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
+        const token = authHeader.replace('Bearer ', '').trim();
+        if (!token) {
+            return jsonResponse({ error: "unauthorized", message: "Empty Bearer token" }, 401);
+        }
 
-        // 2. AI Analysis (Gemini) - NOW RETURNS 3D TAXONOMY
-        const systemPrompt = `Você é um especialista em diagnóstico de manutenções. 
-SUA TAREFA CRÍTICA: Retornar uma TAXONOMIA ESTRUTURADA (3 dimensões) para matching preciso de prestadores.
+        // Create auth-verifying client using anon key and token
+        const authClient = createClient(supabaseUrl, supabaseAnonKey || supabaseServiceKey);
+        const { data: userData, error: userError } = await authClient.auth.getUser(token);
 
-Retorne APENAS JSON no formato exato abaixo.`;
+        if (userError || !userData?.user?.id) {
+            return jsonResponse({ error: "unauthorized", message: "Invalid or expired user token" }, 401);
+        }
 
-        const userPrompt = `Analise este pedido no domínio "${domain}":
+        const callerUid = userData.user.id;
+
+        // 2. Validate Body & requestId
+        let body: any;
+        try {
+            body = await req.json();
+        } catch {
+            return jsonResponse({ error: "bad_request", message: "Invalid JSON payload" }, 400);
+        }
+
+        const { requestId, category = 'mobilidade', answers = {}, userText = '', lat, lng } = body || {};
+
+        if (!requestId || typeof requestId !== 'string' || !UUID_REGEX.test(requestId)) {
+            return jsonResponse({
+                error: "bad_request",
+                message: "A valid UUID requestId is required."
+            }, 400);
+        }
+
+        const domain = category;
+        const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+
+        // 3. Verify request exists and caller is owner
+        const { data: requestRow, error: fetchError } = await serviceClient
+            .from('requests')
+            .select('id, user_id, ai_result_json, status')
+            .eq('id', requestId)
+            .single();
+
+        if (fetchError || !requestRow) {
+            return jsonResponse({
+                error: "not_found",
+                message: "Request not found"
+            }, 404);
+        }
+
+        if (requestRow.user_id !== callerUid) {
+            return jsonResponse({
+                error: "forbidden",
+                message: "You are not the owner of this request"
+            }, 403);
+        }
+
+        // 4. Idempotency check: If already analyzed, return cached analysis immediately
+        if (requestRow.ai_result_json?.asset_type) {
+            console.log(`⚡ [analyze-request] Idempotent hit: request ${requestId} already analyzed`);
+            return jsonResponse({
+                analysis: requestRow.ai_result_json,
+                idempotent: true,
+                source: requestRow.ai_result_json.source || "cached",
+                degraded: Boolean(requestRow.ai_result_json.degraded)
+            }, 200);
+        }
+
+        // 5. Execute AI or Deterministic Fallback
+        let aiJson: TaxonomyAnalysis | null = null;
+        let usedSource: "gemini" | "deterministic_fallback" = "deterministic_fallback";
+        let isDegraded = true;
+
+        const apiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY");
+
+        if (apiKey) {
+            try {
+                const systemPrompt = `Você é um especialista em diagnóstico de manutenções. 
+SUA TAREFA: Retornar uma TAXONOMIA ESTRUTURADA (3 dimensões: domain, asset_type, service_type, issue_tags, problem_guess, confidence, summary_for_provider).
+Retorne APENAS JSON.`;
+
+                const userPrompt = `Analise este pedido no domínio "${domain}":
 Respostas do Funil: ${JSON.stringify(answers)}
 Texto do Usuário: ${userText || 'N/A'}
 
-**IDENTIFIQUE COM PRECISÃO:**
-
-1. **asset_type** (string): O equipamento/objeto EXATO.
-   - Se mobilidade: "carro", "moto", "bicicleta", "patinete"
-   - Se casa: "ar_condicionado", "geladeira", "chuveiro", "pia", "vaso", "portao", "janela"
-   - Se tecnologia: "tv", "celular", "notebook", "impressora"
-
-2. **service_type** (string): O tipo de serviço TÉCNICO.
-   - "mecanica" (motor, peças mecânicas)
-   - "eletrica" (fiação, tomadas, circuitos)
-   - "hidraulica" (água, encanamento)
-   - "instalacao" (montar, instalar)
-   - "manutencao" (preventiva, limpeza)
-   - "diagnostico" (avaliar)
-
-3. **issue_tags** (array): Tags ESPECÍFICAS do problema (max 5).
-   Exemplos: ["bateria", "descarrega"], ["corrente", "folga"], ["vazamento", "pia"]
-
-4. **problem_guess** (string): Resumo curto 3-5 palavras.
-
-5. **confidence** (number 0-1): Sua certeza na identificação.
-
-6. **summary_for_provider** (string): Parágrafo técnico (max 200 chars).
-
-**RETORNE JSON:**
+Retorne JSON no formato:
 {
   "domain": "${domain}",
-  "asset_type": "bicicleta",
+  "asset_type": "carro",
   "service_type": "mecanica",
-  "issue_tags": ["corrente", "folga"],
-  "problem_guess": "Corrente solta/barulho",
+  "issue_tags": ["motor", "ignicao"],
+  "problem_guess": "Motor não dá partida",
   "confidence": 0.85,
-  "summary_for_provider": "Cliente relata corrente da bicicleta com folga. Pode precisar ajuste ou substituição."
-}`
+  "summary_for_provider": "Cliente relata veículo que não liga."
+}`;
 
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: `${systemPrompt}\n\n${userPrompt}`
-                    }]
-                }],
-                generationConfig: {
-                    responseMimeType: "application/json"
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                    method: "POST",
+                    signal: controller.signal,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    })
+                });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (content) {
+                        const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+                        const parsed = JSON.parse(cleanContent);
+                        if (parsed?.asset_type) {
+                            aiJson = {
+                                domain: parsed.domain || domain,
+                                asset_type: parsed.asset_type,
+                                service_type: parsed.service_type || 'geral',
+                                issue_tags: Array.isArray(parsed.issue_tags) ? parsed.issue_tags : [],
+                                problem_guess: parsed.problem_guess || 'Reparo solicitado',
+                                confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.85,
+                                summary_for_provider: parsed.summary_for_provider || 'Análise de serviço',
+                                source: "gemini",
+                                degraded: false
+                            };
+                            usedSource = "gemini";
+                            isDegraded = false;
+                        }
+                    }
                 }
-            })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error("Gemini API Error:", data);
-            throw new Error(`Gemini API Error (${response.status}): ${JSON.stringify(data)}`);
-        }
-
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!content) {
-            throw new Error("No content from Gemini");
-        }
-
-        // Clean markdown if present
-        const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-        const aiJson = JSON.parse(cleanContent);
-        const { confidence, factors } = computeConfidence(aiJson, answers || {});
-        aiJson.confidence_model = clamp01(aiJson.confidence, 0.5);
-        aiJson.confidence = confidence;
-        aiJson.confidence_factors = factors;
-
-        // 3. Find Providers (GIS)
-        let providers = [];
-        if (lat && lng) {
-            const { data: nearbyProviders, error: rpcError } = await supabase.rpc('find_nearby_providers', {
-                user_lat: lat,
-                user_lng: lng,
-                category_filter: category,
-                radius_km: 15
-            });
-
-            if (!rpcError) {
-                providers = nearbyProviders || [];
-            } else {
-                console.error("RPC Error:", rpcError);
+            } catch (geminiErr) {
+                console.warn("⚠️ [analyze-request] Upstream Gemini failed, falling back gracefully:", geminiErr);
             }
         }
 
-        // 4. Update Request with 3D TAXONOMY
-        if (requestId) {
-            await supabase.from('requests').update({
+        // Deterministic Fallback if Gemini unavailable or failed
+        if (!aiJson) {
+            aiJson = getDeterministicTaxonomy(domain, answers, userText);
+            usedSource = "deterministic_fallback";
+            isDegraded = true;
+        }
+
+        // 6. Update Request with 3D Taxonomy exclusively for this verified requestId
+        const { error: updateError } = await serviceClient
+            .from('requests')
+            .update({
                 ai_result_json: aiJson,
-                status: 'finding',
-                // NEW: 3D Taxonomy fields for deterministic matching
                 domain_slug: aiJson.domain || domain,
                 asset_slug: aiJson.asset_type,
                 service_type_slug: aiJson.service_type,
                 issue_tags: aiJson.issue_tags || []
-            }).eq('id', requestId);
+            })
+            .eq('id', requestId);
+
+        if (updateError) {
+            console.error("Database update error:", updateError);
+            return jsonResponse({ error: "database_error", message: "Failed to persist analysis" }, 500);
         }
 
-        return new Response(JSON.stringify({
+        return jsonResponse({
             analysis: aiJson,
-            providers: providers.slice(0, 5)
-        }), {
-            headers: {
-                "Content-Type": "application/json",
-                'Access-Control-Allow-Origin': '*',
-            }
-        });
+            idempotent: false,
+            source: usedSource,
+            degraded: isDegraded
+        }, 200);
 
-    } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: {
-                "Content-Type": "application/json",
-                'Access-Control-Allow-Origin': '*',
-            }
-        });
+    } catch (error: any) {
+        console.error("Handler error in analyze-request:", error);
+        return jsonResponse({
+            error: "internal_error",
+            message: error?.message || 'Unexpected server error'
+        }, 500);
     }
 });

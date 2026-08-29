@@ -54,8 +54,23 @@ export interface ProviderSpecialization {
     serviceTypeSlug?: string;
 }
 
-// DB-level statuses (lowercase, matching live Supabase `requests.status`)
-export type TicketStatus = 'finding' | 'offered' | 'accepted' | 'paid' | 'en_route' | 'done' | 'completed' | 'canceled';
+// DB-level statuses (matching live Supabase requests.status)
+export type TicketStatus =
+    | 'draft'
+    | 'finding'
+    | 'offered'
+    | 'answered'
+    | 'accepted'
+    | 'confirmed'
+    | 'en_route'
+    | 'arrived'
+    | 'quote_provided'
+    | 'quote_accepted'
+    | 'done'
+    | 'declined'
+    | 'canceled'
+    | 'expired'
+    | 'disputed';
 
 // Context-only states (never stored in the DB)
 export type ContextStatus = TicketStatus | 'idle' | 'drafting';
@@ -80,8 +95,8 @@ export interface Ticket {
     images?: string[];
     audio?: string;
 
-    // Location (gatekeeping: partial until ACCEPTED)
-    address?: string; // Full address only after PAID
+    // Location (gatekeeping: partial until CONFIRMED)
+    address?: string;
     streetNumber?: string;
     complement?: string;
     neighborhood?: string;
@@ -100,16 +115,24 @@ export interface Ticket {
     providerName?: string;
     offers?: TicketOffer[];
 
-    // Payment
-    ticketFee?: number; // Fee paid by client (mainly for instant)
-    ticketFeePaid?: boolean;
-    servicePrice?: number; // Final service price
+    // Payment & Quote
+    displacementFee?: number;
+    displacementPaymentMethod?: string;
+    serviceQuote?: number;
+    servicePrice?: number;
+    servicePaymentMethod?: string;
+    servicePaymentStatus?: string;
+    paymentMethod?: string;
+    paymentStatus?: string;
+    cancellationReason?: string;
 
     // Scheduling
     scheduledAt?: string; // For evaluation/workshop tracks
     estimatedArrival?: number; // Minutes for instant
 
-    // Completion
+    // Dual Confirmation & Completion
+    doneProviderAt?: string;
+    doneClientAt?: string;
     completedAt?: string;
     warranty?: Warranty;
 
@@ -209,7 +232,7 @@ export interface LedgerEntry {
     date: string; // ISO date
     price: number;
     warranty?: Warranty;
-    status: 'completed' | 'canceled';
+    status: 'done' | 'canceled';
 }
 
 // ===== FUNNEL SYSTEM =====
@@ -307,6 +330,21 @@ export interface Notification {
     related_id?: string;
     is_read: boolean;
     created_at: string;
+}
+
+// ===== PARTNER HIGHLIGHTS =====
+export interface PartnerHighlight {
+    id: string;
+    partner_id: string;
+    name: string;
+    description: string | null;
+    image_url: string | null;
+    price: number;
+    original_price: number | null;
+    is_active: boolean;
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
 }
 
 // ===== FILTER SYSTEM =====

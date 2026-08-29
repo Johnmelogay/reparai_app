@@ -39,8 +39,7 @@ export function useOpenRequests() {
         queryKey,
         queryFn: fetchOpenRequests,
         enabled: !!userId,
-        staleTime: 30 * 1000,
-        refetchInterval: 4 * 1000, // Aggressive polling for fast offer discovery
+        staleTime: 60 * 1000,
     });
 
     // Realtime: listen for new requests being inserted with status 'finding'

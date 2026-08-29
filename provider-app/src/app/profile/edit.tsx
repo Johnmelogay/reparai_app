@@ -3,6 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { usePartnerSpecializations } from '@/hooks/usePartnerSpecializations';
 import { useProviderProfile } from '@/hooks/useProviderProfile';
 import { supabase } from '@/services/supabase';
+import { compressAndUpload } from '@/utils/imageUpload';
 import { fetchAssets, fetchDomains, fetchServiceTypes } from '@/services/taxonomy';
 import { TaxonomyAsset, TaxonomyDomain, TaxonomyServiceType } from '@/types';
 import { normalizeCategoryDomain } from '@/utils/category';
@@ -145,36 +146,21 @@ export default function EditProviderProfileScreen() {
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsEditing: true,
             aspect: [1, 1],
-            quality: 0.85,
+            quality: 1, // raw — compression handled by compressAndUpload
         });
 
         if (result.canceled || !result.assets?.[0]) return;
 
-        const asset = result.assets[0];
-
         try {
             setUploadingAvatar(true);
-            const response = await fetch(asset.uri);
-            const blob = await response.blob();
-            const extension = asset.fileName?.split('.').pop() || 'jpg';
-            const contentType = asset.mimeType || 'image/jpeg';
-            const filePath = `${user.id}/avatar-${Date.now()}.${extension}`;
+            const nextAvatarUrl = await compressAndUpload({
+                uri: result.assets[0].uri,
+                bucket: 'partner-avatars',
+                path: `${user.id}/avatar-${Date.now()}.jpg`,
+                maxWidth: 400,
+                quality: 0.7,
+            });
 
-            const { error: uploadError } = await supabase.storage
-                .from('partner-avatars')
-                .upload(filePath, blob, {
-                    cacheControl: '3600',
-                    contentType,
-                    upsert: true,
-                });
-
-            if (uploadError) throw uploadError;
-
-            const { data: publicData } = supabase.storage
-                .from('partner-avatars')
-                .getPublicUrl(filePath);
-
-            const nextAvatarUrl = publicData.publicUrl;
             setAvatarUrl(nextAvatarUrl);
 
             const { error } = await updateProfile({ avatar_url: nextAvatarUrl });

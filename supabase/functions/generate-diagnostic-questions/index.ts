@@ -1,6 +1,149 @@
 // supabase/functions/generate-diagnostic-questions/index.ts
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+interface DiagnosticQuestion {
+    id: string;
+    text: string;
+    type: 'boolean' | 'select' | 'tri';
+    options?: { label: string; value: string }[];
+}
+
+interface QuestionsResult {
+    questions: DiagnosticQuestion[];
+    confidence: number;
+    source: "gemini" | "deterministic_fallback";
+    degraded: boolean;
+}
+
+function getDeterministicFallback(category: string, answers: Record<string, string> = {}, userText?: string): QuestionsResult {
+    const domain = (category || 'mobilidade').toLowerCase();
+    const answeredKeys = Object.keys(answers || {});
+    const count = answeredKeys.length;
+
+    let questions: DiagnosticQuestion[] = [];
+    let confidence = 0.35;
+
+    if (domain.includes('mobilidade') || domain.includes('car') || domain.includes('moto') || domain.includes('bike')) {
+        if (count === 0) {
+            questions = [{
+                id: 'q_mob_asset',
+                text: 'Qual é o seu veículo?',
+                type: 'select',
+                options: [
+                    { label: '🚗 Carro', value: 'carro' },
+                    { label: '🏍️ Moto', value: 'moto' },
+                    { label: '🚲 Bicicleta', value: 'bicicleta' },
+                    { label: '🛴 Patinete', value: 'patinete' },
+                ]
+            }];
+            confidence = 0.35;
+        } else if (count === 1) {
+            questions = [{
+                id: 'q_mob_service',
+                text: 'Qual a principal área do problema?',
+                type: 'select',
+                options: [
+                    { label: '⚙️ Mecânica / Motor', value: 'mecanica' },
+                    { label: '⚡ Elétrica / Bateria', value: 'eletrica' },
+                    { label: '🛑 Freios e Suspensão', value: 'freios' },
+                    { label: '❄️ Ar Condicionado', value: 'ar_condicionado' },
+                ]
+            }];
+            confidence = 0.65;
+        } else {
+            questions = [{
+                id: 'q_mob_symptom',
+                text: 'O que está acontecendo no momento?',
+                type: 'select',
+                options: [
+                    { label: '❌ Não liga / Parou de vez', value: 'nao_liga' },
+                    { label: '🔊 Barulho anormal / Estalo', value: 'barulho' },
+                    { label: '⚠️ Luz de alerta no painel', value: 'alerta_painel' },
+                    { label: '💧 Vazamento aparente', value: 'vazamento' },
+                ]
+            }];
+            confidence = 0.85;
+        }
+    } else if (domain.includes('casa') || domain.includes('home') || domain.includes('reforma')) {
+        if (count === 0) {
+            questions = [{
+                id: 'q_casa_asset',
+                text: 'Qual equipamento ou item precisa de reparo?',
+                type: 'select',
+                options: [
+                    { label: '❄️ Ar Condicionado', value: 'ar_condicionado' },
+                    { label: '🧊 Geladeira / Freezer', value: 'geladeira' },
+                    { label: '💧 Encanamento / Pia / Vaso', value: 'hidraulica' },
+                    { label: '⚡ Fiação / Disjuntor / Tomadas', value: 'eletrica' },
+                    { label: '🧺 Máquina de Lavar', value: 'maquina_lavar' },
+                ]
+            }];
+            confidence = 0.35;
+        } else {
+            questions = [{
+                id: 'q_casa_symptom',
+                text: 'Qual o defeito observado?',
+                type: 'select',
+                options: [
+                    { label: '❌ Não liga ou parou', value: 'parou' },
+                    { label: '💧 Vazamento de água', value: 'vazamento' },
+                    { label: '🔊 Barulho excessivo / Vibração', value: 'barulho' },
+                    { label: '⚡ Curto / Desarmando disjuntor', value: 'curto' },
+                ]
+            }];
+            confidence = 0.85;
+        }
+    } else {
+        // Tecnologia / Outros
+        if (count === 0) {
+            questions = [{
+                id: 'q_tec_asset',
+                text: 'Qual dispositivo precisa de conserto?',
+                type: 'select',
+                options: [
+                    { label: '📱 Celular / Smartphone', value: 'celular' },
+                    { label: '💻 Notebook / Computador', value: 'notebook' },
+                    { label: '📺 Televisão / Smart TV', value: 'tv' },
+                    { label: '🖨️ Impressora', value: 'impressora' },
+                ]
+            }];
+            confidence = 0.35;
+        } else {
+            questions = [{
+                id: 'q_tec_symptom',
+                text: 'Qual o sintoma principal?',
+                type: 'select',
+                options: [
+                    { label: '🖥️ Tela quebrada ou sem imagem', value: 'tela' },
+                    { label: '🔋 Bateria não dura / Não carrega', value: 'bateria' },
+                    { label: '❌ Não liga', value: 'nao_liga' },
+                    { label: '🐢 Muito lento / Travando', value: 'lentidao' },
+                ]
+            }];
+            confidence = 0.85;
+        }
+    }
+
+    return {
+        questions,
+        confidence,
+        source: "deterministic_fallback",
+        degraded: true
+    };
+}
+
+const jsonResponse = (data: any, status: number = 200) => {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: {
+            "Content-Type": "application/json",
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+        }
+    });
+};
+
 Deno.serve(async (req) => {
     // OPTIONS for CORS
     if (req.method === 'OPTIONS') {
@@ -13,155 +156,104 @@ Deno.serve(async (req) => {
         });
     }
 
-    try {
-        const { category, answers, userText, min_confidence = 0.7 } = await req.json();
+    if (req.method !== 'POST') {
+        return jsonResponse({ error: 'method_not_allowed' }, 405);
+    }
 
-        // category now contains domain slug (mobilidade, casa, tecnologia)
+    try {
+        let body: any = {};
+        try {
+            body = await req.json();
+        } catch {
+            return jsonResponse({ error: "bad_request", message: "Invalid JSON payload" }, 400);
+        }
+
+        const { category = 'mobilidade', answers = {}, userText = '', min_confidence = 0.7 } = body || {};
         const domain = category;
 
-        // Use GEMINI_API_KEY
-        const apiKey = Deno.env.get("GEMINI_API_KEY");
+        const apiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY");
+
+        // If no Gemini key is set in environment, seamlessly return deterministic high-confidence questions
         if (!apiKey) {
-            throw new Error("Missing GEMINI_API_KEY");
+            const fallbackResult = getDeterministicFallback(domain, answers, userText);
+            return jsonResponse(fallbackResult, 200);
         }
 
-        // Construct Prompt - NOW DOMAIN-AWARE FOR 3D TAXONOMY
+        // Construct Prompt for Gemini
         const systemPrompt = `Você é um assistente técnico especialista em triagem para o DOMÍNIO "${domain}".
-        
 SEU OBJETIVO: Fazer perguntas PROGRESSIVAS para identificar:
-1. **asset_type** (equipamento/objeto exato)
-2. **service_type** (mecânica, elétrica, hidráulica, manutenção, etc)
-3. **issue_tags** (tags específicas do problema)
+1. asset_type (equipamento/objeto exato)
+2. service_type (mecânica, elétrica, hidráulica, manutenção, etc)
+3. issue_tags (tags específicas do problema)
 
-**CONTEXTO DE DOMÍNIO:**
-- Se "mobilidade": pergunte sobre carro, moto, bicicleta, patinete
-- Se "casa": pergunte sobre ar_condicionado, geladeira, chuveiro, pia, vaso, portão, janela
-- Se "tecnologia": pergunte sobre tv, celular, notebook, impressora
+REGRAS:
+- Gere APENAS 1 pergunta por vez.
+- Se for pergunta de escolha, use type="select" com options (label com emoji e value).
+- Se for confirmação sim/não, use type="boolean".
+- Retorne estritamente JSON.`;
 
-REGRAS RÍGIDAS E CRÍTICAS:
-1. **MODO INICIAL (Cold Start)**: Se 'answers' estiver vazio:
-   - GERE uma pergunta para identificar o aparelho/equipamento (ex: "Qual tipo de equipamento?")
-   - GERE uma pergunta para identificar o problema macro (ex: "O que está acontecendo?")
-
-2. **MODO "OUTRO" (Input Manual)**: 
-   - O sistema força input de texto para "Outro".
-   - Se resposta for texto (ex: "Bicicleta Caloi"), ACEITE como aparelho identificado.
-
-3. **THRESHOLD DE CONFIANÇA (${min_confidence}):**
-   - SÓ PARE de perguntar (retorne 'questions': []) SE:
-     a) 'confidence' >= ${min_confidence}
-     b) Você tem informação suficiente para determinar asset_type + service_type
-   
-   **INFORMAÇÕES MÍNIMAS POR DOMÍNIO:**
-   - **mobilidade**: VEÍCULO (carro/moto/bicicleta) + PROBLEMA (mecânica/elétrica) + SINTOMA específico
-   - **casa**: EQUIPAMENTO ou LOCAL + TIPO DE SERVIÇO (hidráulica/elétrica/manutenção) + SINTOMA
-   - **tecnologia**: DISPOSITIVO + DEFEITO específico
-
-4. **FORMATO E TIPOS (CRÍTICO)**:
-   - **NUNCA** use 'type: "boolean"' para perguntas abertas.
-   - Se pergunta for "Onde?", "Qual?", USE 'type: "select"' com opções.
-   - Se pergunta for Sim/Não, use 'type: "boolean"'.
-   - **EMOJIS**: Use SEMPRE emoji no início do 'label' (ex: "🚗 Carro", "❄️ Ar Condicionado").
-   - Retorne APENAS JSON.
-
-5. **COERÊNCIA LÓGICA E MEMÓRIA (CRÍTICO)**:
-           - **RESPEITE O CONTEXTO**: Se o usuário disse que é uma "Bicicleta", **JAMAIS** pergunte sobre "Ar condicionado", "Motor", "Gasolina" ou coisas que não existem no objeto.
-           - **NÃO SEJA REDUNDANTE**: Se o usuário escreveu "Patinete com problema na bateria":
-             - NÃO pergunte "Qual o problema?" oferecendo "Bateria" como opção. VOCÊ JÁ SABE QUE É BATERIA.
-             - Pergunte DETALHES: "A bateria não carrega ou descarrega rápido?", "Quanto tempo tem?", etc.
-           - **AFUNILAMENTO INTELIGENTE**: Cada resposta deve restringir o universo das próximas perguntas.
-           - **MEMÓRIA DE "OUTRO"**: Se o input foi manual (ex: "Drone"), assuma que é um Drone e pergunte sobre hélices, bateria, câmera.
-
-        6. **QUANTIDADE**:
-           - **GERE APENAS 1 (UMA) PERGUNTA POR VEZ.**
-           - O fluxo deve ser: Pergunta IA -> Resposta User -> Pergunta IA. Não mande listas.
-
-        7. **SAÍDA JSON**:
-           - { "questions": [...], "confidence": 0.XX }`;
-
-        const userPrompt = `Contexto do pedido de serviço:
+        const userPrompt = `Contexto:
 - Categoria: ${category}
-- Respostas Atuais (O que já sabemos): ${JSON.stringify(answers)}
+- Respostas atuais: ${JSON.stringify(answers)}
 - Descrição do usuário: "${userText || ''}"
 
-Tarefa:
-Gere as próximas perguntas.
-Se for pergunta de "Onde", "Qual", "Como" -> USE type="select" com opções.
-Se for pergunta de confirmação -> USE type="boolean".
-
-Saída JSON Obrigatória:
-
-Saída JSON Obrigatória:
+Retorne JSON no formato:
 {
-    "questions": [
-        {
-            "id": "q_" + timestamp ou sequencial_unico (CRÍTICO: GERE UM ID ÚNICO CADA VEZ, ex: "q_bateria_1", "q_local_2"),
-            "text": "Texto da pergunta",
-            "type": "boolean" | "select",
-            "options": [{"label": "🚗 Opção A", "value": "a"}] (OBRIGATÓRIO PARA SELECT)
-        }
-    ],
-    "confidence": 0.1 a 1.0 (Se < 0.7, o sistema continuará perguntando)
+  "questions": [
+    {
+      "id": "q_" + sufixo_unico,
+      "text": "Pergunta clara",
+      "type": "select",
+      "options": [{"label": "🚗 Carro", "value": "carro"}]
+    }
+  ],
+  "confidence": 0.5 a 1.0
 }`;
 
-        // Gemini 2.0 Flash Request
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: `${systemPrompt}\n\n${userPrompt}`
-                    }]
-                }],
-                generationConfig: {
-                    responseMimeType: "application/json"
-                }
-            })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error("Gemini API Error:", data);
-            throw new Error(`Gemini API Error (${response.status}): ${JSON.stringify(data)}`);
-        }
-
-        // Extract Text from Gemini Response
-        // Structure: candidates[0].content.parts[0].text
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!content) {
-            console.error("Gemini No Content:", data);
-            throw new Error(`No content from Gemini. Full Response: ${JSON.stringify(data)}`);
-        }
-
-        let parsedContent;
         try {
-            // Gemini might return Markdown code blocks sometimes even with JSON mode, handle just in case
-            const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-            parsedContent = JSON.parse(cleanContent);
-        } catch (e) {
-            console.error("JSON Parse Error:", content);
-            throw new Error("Failed to parse AI JSON response");
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                method: "POST",
+                signal: controller.signal,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+                    generationConfig: { responseMimeType: "application/json" }
+                })
+            });
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+                const data = await response.json();
+                const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (content) {
+                    const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const parsed = JSON.parse(cleanContent);
+                    if (Array.isArray(parsed?.questions)) {
+                        return jsonResponse({
+                            questions: parsed.questions,
+                            confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.85,
+                            source: "gemini",
+                            degraded: false
+                        }, 200);
+                    }
+                }
+            }
+        } catch (geminiErr) {
+            console.warn("⚠️ [generate-diagnostic-questions] Upstream Gemini failed, falling back gracefully:", geminiErr);
         }
 
-        return new Response(JSON.stringify(parsedContent), {
-            headers: {
-                "Content-Type": "application/json",
-                'Access-Control-Allow-Origin': '*',
-            }
-        });
+        // Graceful Fallback if Gemini fails or times out
+        const fallback = getDeterministicFallback(domain, answers, userText);
+        return jsonResponse(fallback, 200);
 
-    } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: {
-                "Content-Type": "application/json",
-                'Access-Control-Allow-Origin': '*',
-            }
-        });
+    } catch (error: any) {
+        console.error("Handler error:", error);
+        return jsonResponse({
+            error: "internal_error",
+            message: error?.message || 'Unexpected error'
+        }, 500);
     }
 });

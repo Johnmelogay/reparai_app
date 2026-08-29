@@ -3,8 +3,23 @@
  * Re-exports shared types and adds provider-specific ones.
  */
 
-// DB-level statuses (lowercase, matching live Supabase requests.status)
-export type TicketStatus = 'finding' | 'offered' | 'accepted' | 'paid' | 'en_route' | 'completed' | 'canceled';
+// DB-level statuses (matching live Supabase requests.status)
+export type TicketStatus =
+    | 'draft'
+    | 'finding'
+    | 'offered'
+    | 'answered'
+    | 'accepted'
+    | 'confirmed'
+    | 'en_route'
+    | 'arrived'
+    | 'quote_provided'
+    | 'quote_accepted'
+    | 'done'
+    | 'declined'
+    | 'canceled'
+    | 'expired'
+    | 'disputed';
 export type ContextStatus = TicketStatus | 'idle';
 export type TicketTrack = 'instant' | 'evaluation' | 'workshop';
 export type ProviderType = 'MOBILE' | 'FIXED';
@@ -17,6 +32,7 @@ export interface ProviderProfile {
     phone: string | null;
     user_type: string;
     is_online: boolean;
+    is_verified: boolean;
     location: unknown; // PostGIS geography
     service_category: string | null;
     rating: number | null;
@@ -63,7 +79,7 @@ export interface OpenRequest {
     issue_tags: string[] | null;
     lat: number;
     lng: number;
-    address: string | null;       // Only city/neighborhood before paid
+    address: string | null;       // Hidden (NULL) in open feed for privacy
     neighborhood: string | null;
     city: string | null;
     dist_km: number | null;
@@ -80,6 +96,13 @@ export interface ActiveOrder extends OpenRequest {
     payment_method: string | null;
     payment_status: string | null;
     displacement_fee: number | null;
+    displacement_payment_method: string | null;
+    service_quote: number | null;
+    service_payment_method: string | null;
+    service_payment_status: string | null;
+    done_provider_at: string | null;
+    done_client_at: string | null;
+    cancellation_reason: string | null;
     // Joined client data
     client_name: string | null;
     client_avatar: string | null;
@@ -108,6 +131,21 @@ export interface Notification {
     related_id?: string;
     is_read: boolean;
     created_at: string;
+}
+
+// ===== Partner Highlights =====
+export interface PartnerHighlight {
+    id: string;
+    partner_id: string;
+    name: string;
+    description: string | null;
+    image_url: string | null;
+    price: number;
+    original_price: number | null;
+    is_active: boolean;
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
 }
 
 // ===== Chat =====

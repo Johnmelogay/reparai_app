@@ -20,9 +20,10 @@ export interface ProviderServiceItem {
     done_client_at: string | null;
 }
 
-const IN_PROGRESS_STATUSES = ['accepted', 'paid', 'en_route'];
-const DONE_STATUSES = ['done', 'completed', 'canceled'];
-const ALLOWED_STATUSES = new Set([...IN_PROGRESS_STATUSES, ...DONE_STATUSES]);
+const IN_PROGRESS_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const DONE_STATUSES = ['done'];
+const CANCELED_STATUSES = ['canceled', 'declined', 'expired', 'disputed'];
+const ALLOWED_STATUSES = new Set([...IN_PROGRESS_STATUSES, ...DONE_STATUSES, ...CANCELED_STATUSES]);
 
 function normalizeStatus(status: string | null | undefined): string {
     return (status || '').toLowerCase().trim();
@@ -113,6 +114,7 @@ export function useProviderServices() {
     return {
         inProgress: all.filter((item) => IN_PROGRESS_STATUSES.includes(item.status)),
         done: all.filter((item) => DONE_STATUSES.includes(item.status)),
+        canceled: all.filter((item) => CANCELED_STATUSES.includes(item.status)),
         loading: query.isLoading,
         error: query.error ? toErrorMessage(query.error, 'Erro ao carregar serviços.') : null,
         refetch: query.refetch,

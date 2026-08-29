@@ -59,7 +59,7 @@ export default function CheckoutScreen() {
     }, [hasRequiredParams, router]);
 
     const handleConfirmOrder = async () => {
-        if (!hasRequiredParams) return;
+        if (!hasRequiredParams || isSubmitting) return;
         setIsSubmitting(true);
 
         // 1. Call RPC to confirm order
@@ -71,14 +71,7 @@ export default function CheckoutScreen() {
 
         if (rpcError) {
             console.error('Error confirming order:', rpcError);
-            if (rpcError.code === 'PGRST202' || rpcError.code === '42883') {
-                Alert.alert(
-                    'Backend desatualizado',
-                    'A função confirm_order ainda não existe no banco. Rode a migration SQL mais recente e tente novamente.'
-                );
-            } else {
-                Alert.alert('Erro de Confirmação', 'Não foi possível confirmar o pedido no servidor. Tente novamente.');
-            }
+            Alert.alert('Erro de Confirmação', rpcError?.message || 'Não foi possível confirmar o pedido no servidor. Tente novamente.');
             setIsSubmitting(false);
             return;
         }
@@ -99,8 +92,8 @@ export default function CheckoutScreen() {
                 reviews: Number(providerData.reviews_count ?? providerData.reviews ?? 0),
                 category: providerData.service_category,
                 categories: [providerData.service_category],
-                visitPrice: String(price),   // Use the offered price
-                distance: 'próximo', // We don't have exact distance here unless passed via params
+                visitPrice: String(price),
+                distance: 'próximo',
                 coordinates: {
                     latitude: providerData.lat || 0,
                     longitude: providerData.long || 0
@@ -110,7 +103,7 @@ export default function CheckoutScreen() {
                 address: providerData.address_label || 'Endereço Indisponível',
                 operationalScore: providerData.operational_score || 100
             });
-            setStatus('paid');
+            setStatus('confirmed');
         } else {
             setAssignedProvider({
                 id: providerId,
@@ -128,7 +121,7 @@ export default function CheckoutScreen() {
                 address: 'Endereço indisponível',
                 operationalScore: 100,
             });
-            setStatus('paid');
+            setStatus('confirmed');
         }
 
         setIsSubmitting(false);
@@ -142,7 +135,7 @@ export default function CheckoutScreen() {
                 <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} disabled={isSubmitting}>
                     <ChevronLeft size={24} color="#1F2937" />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>Revisão e Pagamento</Text>
+                <Text style={styles.headerTitle}>Confirmar Solicitação</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -169,43 +162,24 @@ export default function CheckoutScreen() {
                 </Card>
 
                 <Card style={styles.sectionCard}>
-                    <Text style={styles.sectionTitle}>Resumo de Valores</Text>
+                    <Text style={styles.sectionTitle}>Resumo do Deslocamento</Text>
 
                     <View style={styles.priceRow}>
-                        <Text style={styles.priceLabel}>Taxa de deslocamento</Text>
+                        <Text style={styles.priceLabel}>Taxa de deslocamento combinada</Text>
                         <Text style={styles.priceValue}>R$ {price.toFixed(2).replace('.', ',')}</Text>
-                    </View>
-
-                    <View style={styles.priceRow}>
-                        <Text style={styles.priceLabel}>Taxa da plataforma</Text>
-                        <Text style={styles.priceValue}>R$ {platformFee.toFixed(2).replace('.', ',')}</Text>
                     </View>
 
                     <View style={styles.divider} />
 
                     <View style={[styles.priceRow, { marginTop: 12 }]}>
-                        <Text style={styles.totalLabel}>Total a pagar</Text>
-                        <Text style={styles.totalValue}>R$ {total.toFixed(2).replace('.', ',')}</Text>
+                        <Text style={styles.totalLabel}>Valor a pagar no local</Text>
+                        <Text style={styles.totalValue}>R$ {price.toFixed(2).replace('.', ',')}</Text>
                     </View>
                 </Card>
 
                 <View style={styles.paymentMethods}>
-                    <Text style={styles.sectionTitle}>Forma de Pagamento</Text>
-                    <Text style={styles.sectionSubtitle}>Como você deseja pagar a taxa de deslocamento?</Text>
-
-                    <TouchableOpacity
-                        style={[styles.paymentOption, selectedPayment === 'credit_card' && styles.paymentOptionSelected]}
-                        onPress={() => setSelectedPayment('credit_card')}
-                    >
-                        <View style={styles.paymentIconWrap}>
-                            <CreditCard size={20} color={selectedPayment === 'credit_card' ? Colors.light.primary : '#6B7280'} />
-                        </View>
-                        <View style={styles.paymentTextWrap}>
-                            <Text style={styles.paymentTitle}>Cartão de Crédito</Text>
-                            <Text style={styles.paymentDesc}>Pagamento seguro via app</Text>
-                        </View>
-                        <View style={[styles.radio, selectedPayment === 'credit_card' && styles.radioSelected]} />
-                    </TouchableOpacity>
+                    <Text style={styles.sectionTitle}>Forma de Pagamento no Local</Text>
+                    <Text style={styles.sectionSubtitle}>Como você prefere pagar a taxa de deslocamento diretamente ao profissional?</Text>
 
                     <TouchableOpacity
                         style={[styles.paymentOption, selectedPayment === 'pix' && styles.paymentOptionSelected]}
@@ -215,10 +189,24 @@ export default function CheckoutScreen() {
                             <Banknote size={20} color={selectedPayment === 'pix' ? Colors.light.primary : '#6B7280'} />
                         </View>
                         <View style={styles.paymentTextWrap}>
-                            <Text style={styles.paymentTitle}>Pix</Text>
-                            <Text style={styles.paymentDesc}>Aprovação imediata</Text>
+                            <Text style={styles.paymentTitle}>Pix (no local)</Text>
+                            <Text style={styles.paymentDesc}>Direto na chave Pix do profissional</Text>
                         </View>
                         <View style={[styles.radio, selectedPayment === 'pix' && styles.radioSelected]} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.paymentOption, selectedPayment === 'credit_card' && styles.paymentOptionSelected]}
+                        onPress={() => setSelectedPayment('credit_card')}
+                    >
+                        <View style={styles.paymentIconWrap}>
+                            <CreditCard size={20} color={selectedPayment === 'credit_card' ? Colors.light.primary : '#6B7280'} />
+                        </View>
+                        <View style={styles.paymentTextWrap}>
+                            <Text style={styles.paymentTitle}>Cartão (no local)</Text>
+                            <Text style={styles.paymentDesc}>Pague na maquininha do profissional</Text>
+                        </View>
+                        <View style={[styles.radio, selectedPayment === 'credit_card' && styles.radioSelected]} />
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -229,33 +217,31 @@ export default function CheckoutScreen() {
                             <Banknote size={20} color={selectedPayment === 'cash' ? Colors.light.primary : '#6B7280'} />
                         </View>
                         <View style={styles.paymentTextWrap}>
-                            <Text style={styles.paymentTitle}>Dinheiro</Text>
-                            <Text style={styles.paymentDesc}>Pague diretamente ao profissional</Text>
+                            <Text style={styles.paymentTitle}>Dinheiro (no local)</Text>
+                            <Text style={styles.paymentDesc}>Pague em espécie ao profissional</Text>
                         </View>
                         <View style={[styles.radio, selectedPayment === 'cash' && styles.radioSelected]} />
                     </TouchableOpacity>
                 </View>
 
-                {selectedPayment === 'cash' && (
-                    <View style={styles.warningBox}>
-                        <AlertCircle size={20} color="#B45309" />
-                        <Text style={styles.warningText}>
-                            Sugerimos perguntar ao profissional se ele tem troco pelo chat assim que o pedido for confirmado.
-                        </Text>
-                    </View>
-                )}
+                <View style={styles.warningBox}>
+                    <AlertCircle size={20} color="#B45309" />
+                    <Text style={styles.warningText}>
+                        O pagamento da taxa de deslocamento e do orçamento do serviço é combinado e acertado diretamente com o profissional no local.
+                    </Text>
+                </View>
             </ScrollView>
 
             <View style={styles.footer}>
                 <Button
-                    title={isSubmitting ? "Confirmando..." : "Confirmar e Contratar"}
+                    title={isSubmitting ? "Confirmando..." : "Confirmar Solicitação"}
                     onPress={handleConfirmOrder}
                     disabled={isSubmitting || !hasRequiredParams}
                     style={styles.cta}
                 />
                 {!isSubmitting && (
                     <Text style={styles.footerTerms}>
-                        Ao confirmar, você concorda em pagar a taxa de deslocamento.
+                        Ao confirmar, você solicita o deslocamento do profissional até seu endereço.
                     </Text>
                 )}
             </View>

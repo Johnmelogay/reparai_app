@@ -7,8 +7,11 @@ import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
     BadgeCheck,
+    Banknote,
     CheckCircle,
     Clock,
+    CreditCard,
+    FileText,
     History,
     MapPin,
     MessageSquare,
@@ -16,6 +19,7 @@ import {
     Shield,
     Star,
     Truck,
+    Wrench,
     X
 } from 'lucide-react-native';
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
@@ -64,14 +68,21 @@ function getCategoryImage(category?: string | null) {
 }
 
 const STATUS_CONFIG: Record<TicketStatus, { label: string; icon: any; color: string; bg: string }> = {
-    finding: { label: 'Aguardando Respostas', icon: Clock, color: '#3B82F6', bg: '#DBEAFE' },
+    draft: { label: 'Rascunho', icon: Clock, color: '#6B7280', bg: '#F3F4F6' },
+    finding: { label: 'Buscando Profissionais', icon: Clock, color: '#3B82F6', bg: '#DBEAFE' },
     offered: { label: 'Propostas Recebidas', icon: BadgeCheck, color: '#8B5CF6', bg: '#EDE9FE' },
-    accepted: { label: 'Pedido Confirmado', icon: BadgeCheck, color: Colors.light.success, bg: Colors.light.successBackground },
-    paid: { label: 'Pagamento Confirmado', icon: BadgeCheck, color: Colors.light.success, bg: Colors.light.successBackground },
-    en_route: { label: 'A caminho', icon: Truck, color: Colors.light.primary, bg: '#FFF4E6' },
+    answered: { label: 'Propostas Recebidas', icon: BadgeCheck, color: '#8B5CF6', bg: '#EDE9FE' },
+    accepted: { label: 'Proposta Selecionada', icon: BadgeCheck, color: '#0284C7', bg: '#E0F2FE' },
+    confirmed: { label: 'Pedido Confirmado', icon: BadgeCheck, color: Colors.light.success, bg: Colors.light.successBackground },
+    en_route: { label: 'A caminho do local', icon: Truck, color: Colors.light.primary, bg: '#FFF4E6' },
+    arrived: { label: 'Prestador no local', icon: MapPin, color: '#0284C7', bg: '#E0F2FE' },
+    quote_provided: { label: 'Orçamento Enviado', icon: FileText, color: '#D97706', bg: '#FEF3C7' },
+    quote_accepted: { label: 'Serviço em Andamento', icon: Wrench, color: '#10B981', bg: '#D1FAE5' },
     done: { label: 'Finalizado', icon: CheckCircle, color: Colors.light.success, bg: Colors.light.successBackground },
-    completed: { label: 'Concluído', icon: BadgeCheck, color: Colors.light.success, bg: Colors.light.successBackground },
+    declined: { label: 'Recusado', icon: X, color: '#6B7280', bg: '#F3F4F6' },
     canceled: { label: 'Cancelado', icon: X, color: '#EF4444', bg: '#FEE2E2' },
+    expired: { label: 'Expirado', icon: Clock, color: '#9CA3AF', bg: '#F3F4F6' },
+    disputed: { label: 'Em Disputa', icon: Shield, color: '#DC2626', bg: '#FEE2E2' },
 };
 
 interface TicketData {
@@ -83,6 +94,10 @@ interface TicketData {
     lat: number | null;
     lng: number | null;
     displacement_fee: number | null;
+    displacement_payment_method?: string | null;
+    service_quote?: number | null;
+    service_payment_method?: string | null;
+    service_payment_status?: string | null;
     provider_id: string | null;
     created_at: string;
     updated_at: string;
@@ -134,8 +149,40 @@ export default function TicketDetailScreen() {
     const [ratingComment, setRatingComment] = useState('');
     const [ratingLoading, setRatingLoading] = useState(false);
 
+    const [acceptQuoteLoading, setAcceptQuoteLoading] = useState(false);
+    const [quotePaymentMethod, setQuotePaymentMethod] = useState<'pix' | 'cash' | 'credit_card'>('pix');
+
+    const handleAcceptQuote = useCallback(async () => {
+        if (!ticket || acceptQuoteLoading) return;
+        Alert.alert(
+            'Aprovar Orçamento',
+            `Deseja aprovar o orçamento de R$ ${(ticket.service_quote || 0).toFixed(2).replace('.', ',')} para execução do serviço?`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Aprovar',
+                    onPress: async () => {
+                        try {
+                            setAcceptQuoteLoading(true);
+                            const { error } = await supabase.rpc('client_accept_quote', {
+                                p_request_id: ticket.id,
+                                p_payment_method: quotePaymentMethod,
+                            });
+                            if (error) throw error;
+                            Alert.alert('Orçamento aprovado!', 'O prestador foi notificado e pode iniciar o serviço.');
+                        } catch (err: any) {
+                            Alert.alert('Erro ao aprovar', err.message || 'Não foi possível aprovar o orçamento.');
+                        } finally {
+                            setAcceptQuoteLoading(false);
+                        }
+                    },
+                },
+            ]
+        );
+    }, [ticket, quotePaymentMethod, acceptQuoteLoading]);
+
     const handleConfirmDone = useCallback(async () => {
-        if (!ticket) return;
+        if (!ticket || confirmLoading) return;
         Alert.alert(
             'Confirmar conclusão',
             'Você confirma que o serviço foi realizado com sucesso?',
@@ -157,16 +204,14 @@ export default function TicketDetailScreen() {
                 },
             ]
         );
-    }, [ticket]);
+    }, [ticket, confirmLoading]);
 
     const handleSubmitRating = useCallback(async () => {
-        if (!ticket || !provider || ratingValue === 0) return;
+        if (!ticket || !provider || ratingValue === 0 || ratingLoading) return;
         try {
             setRatingLoading(true);
             const { error } = await supabase.rpc('submit_review', {
                 p_request_id: ticket.id,
-                p_reviewee_id: provider.id,
-                p_role: 'client',
                 p_rating: ratingValue,
                 p_comment: ratingComment.trim() || null,
             });
@@ -178,7 +223,7 @@ export default function TicketDetailScreen() {
         } finally {
             setRatingLoading(false);
         }
-    }, [ticket, provider, ratingValue, ratingComment]);
+    }, [ticket, provider, ratingValue, ratingComment, ratingLoading]);
 
     // Gradient: faded at client end → solid green at provider end (conveys direction of travel)
     const routeGradientColors = useMemo(() => {
@@ -232,6 +277,10 @@ export default function TicketDetailScreen() {
                     lat: data.lat,
                     lng: data.lng,
                     displacement_fee: data.displacement_fee,
+                    displacement_payment_method: data.displacement_payment_method,
+                    service_quote: data.service_quote,
+                    service_payment_method: data.service_payment_method,
+                    service_payment_status: data.service_payment_status,
                     provider_id: data.provider_id,
                     created_at: data.created_at,
                     updated_at: data.updated_at,
@@ -286,6 +335,10 @@ export default function TicketDetailScreen() {
                         ...prev,
                         status: payload.new.status,
                         provider_id: payload.new.provider_id,
+                        service_quote: payload.new.service_quote,
+                        service_payment_method: payload.new.service_payment_method,
+                        service_payment_status: payload.new.service_payment_status,
+                        displacement_payment_method: payload.new.displacement_payment_method,
                         done_provider_at: payload.new.done_provider_at || null,
                         done_client_at: payload.new.done_client_at || null,
                     } : prev);
@@ -350,7 +403,7 @@ export default function TicketDetailScreen() {
     // 3b. Poll provider location every 8 seconds for smooth displacement tracking
     useEffect(() => {
         const pId = ticket?.provider_id;
-        const isTracking = pId && ['accepted', 'paid', 'en_route'].includes(ticket?.status ?? '');
+        const isTracking = pId && ['confirmed', 'en_route'].includes(ticket?.status ?? '');
         if (!isTracking) return;
 
         const pollLocation = async () => {
@@ -498,7 +551,7 @@ export default function TicketDetailScreen() {
         );
     }
 
-    const isActive = ['accepted', 'paid', 'en_route'].includes(ticket.status);
+    const isActive = ['confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'].includes(ticket.status);
     const statusConfig = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.finding;
     const StatusIcon = statusConfig.icon;
     const shortId = ticket.id.split('-')[0].toUpperCase();
@@ -522,7 +575,7 @@ export default function TicketDetailScreen() {
                 showsVerticalScrollIndicator={false}
             >
                 {/* Map Section - Hide if finished or canceled */}
-                {!['done', 'completed', 'canceled'].includes(ticket.status) && (
+                {!['done', 'canceled', 'declined', 'expired'].includes(ticket.status) && (
                     <View style={styles.mapContainer}>
                         <MapView
                             ref={mapRef}
@@ -675,8 +728,92 @@ export default function TicketDetailScreen() {
                     </Card>
                 )}
 
+                {/* Quote Approval Card (when status === 'quote_provided') */}
+                {ticket.status === 'quote_provided' && (
+                    <Card style={[styles.infoCard, styles.quoteCard]}>
+                        <View style={styles.sectionHeader}>
+                            <FileText size={20} color="#D97706" style={{ marginRight: 8 }} />
+                            <Text style={[styles.sectionTitle, { color: '#92400E' }]}>Orçamento do Serviço</Text>
+                        </View>
+                        <Text style={styles.quoteDesc}>
+                            O profissional avaliou o problema no local e informou o valor para realização do reparo:
+                        </Text>
+                        <View style={styles.quotePriceBox}>
+                            <Text style={styles.quotePriceLabel}>Valor total do serviço</Text>
+                            <Text style={styles.quotePriceValue}>
+                                R$ {(ticket.service_quote || 0).toFixed(2).replace('.', ',')}
+                            </Text>
+                        </View>
+
+                        <Text style={styles.paymentMethodPrompt}>Escolha como pagar o serviço no local:</Text>
+                        <View style={styles.quoteMethodRow}>
+                            <TouchableOpacity
+                                style={[styles.quoteMethodChip, quotePaymentMethod === 'pix' && styles.quoteMethodChipActive]}
+                                onPress={() => setQuotePaymentMethod('pix')}
+                                activeOpacity={0.8}
+                            >
+                                <Banknote size={16} color={quotePaymentMethod === 'pix' ? '#fff' : '#4B5563'} />
+                                <Text style={[styles.quoteMethodChipText, quotePaymentMethod === 'pix' && styles.quoteMethodChipTextActive]}>
+                                    Pix
+                                </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.quoteMethodChip, quotePaymentMethod === 'credit_card' && styles.quoteMethodChipActive]}
+                                onPress={() => setQuotePaymentMethod('credit_card')}
+                                activeOpacity={0.8}
+                            >
+                                <CreditCard size={16} color={quotePaymentMethod === 'credit_card' ? '#fff' : '#4B5563'} />
+                                <Text style={[styles.quoteMethodChipText, quotePaymentMethod === 'credit_card' && styles.quoteMethodChipTextActive]}>
+                                    Cartão
+                                </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.quoteMethodChip, quotePaymentMethod === 'cash' && styles.quoteMethodChipActive]}
+                                onPress={() => setQuotePaymentMethod('cash')}
+                                activeOpacity={0.8}
+                            >
+                                <Banknote size={16} color={quotePaymentMethod === 'cash' ? '#fff' : '#4B5563'} />
+                                <Text style={[styles.quoteMethodChipText, quotePaymentMethod === 'cash' && styles.quoteMethodChipTextActive]}>
+                                    Dinheiro
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <TouchableOpacity
+                            style={[styles.acceptQuoteBtn, acceptQuoteLoading && { opacity: 0.6 }]}
+                            onPress={handleAcceptQuote}
+                            disabled={acceptQuoteLoading}
+                            activeOpacity={0.85}
+                        >
+                            {acceptQuoteLoading ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <>
+                                    <CheckCircle size={18} color="#fff" />
+                                    <Text style={styles.acceptQuoteBtnText}>Aprovar Orçamento</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    </Card>
+                )}
+
+                {/* Service in Progress (status === 'quote_accepted') */}
+                {ticket.status === 'quote_accepted' && !ticket.done_provider_at && (
+                    <Card style={[styles.infoCard, styles.inProgressCard]}>
+                        <View style={styles.sectionHeader}>
+                            <Wrench size={18} color="#059669" style={{ marginRight: 8 }} />
+                            <Text style={[styles.sectionTitle, { color: '#065F46' }]}>Serviço em Execução</Text>
+                        </View>
+                        <Text style={styles.completionDesc}>
+                            Orçamento aprovado no valor de R$ {(ticket.service_quote || 0).toFixed(2).replace('.', ',')}. O profissional está trabalhando no reparo.
+                        </Text>
+                    </Card>
+                )}
+
                 {/* Completion Confirmation */}
-                {ticket.status === 'en_route' && ticket.done_provider_at && !ticket.done_client_at && (
+                {ticket.status === 'quote_accepted' && ticket.done_provider_at && !ticket.done_client_at && (
                     <Card style={[styles.infoCard, styles.completionCard]}>
                         <View style={styles.completionHeader}>
                             <CheckCircle size={20} color={Colors.light.success} />
@@ -704,7 +841,7 @@ export default function TicketDetailScreen() {
                 )}
 
                 {/* Waiting for provider confirmation */}
-                {ticket.status === 'en_route' && ticket.done_client_at && !ticket.done_provider_at && (
+                {ticket.status === 'quote_accepted' && ticket.done_client_at && !ticket.done_provider_at && (
                     <Card style={[styles.infoCard, styles.waitingCard]}>
                         <View style={styles.completionHeader}>
                             <Clock size={18} color={Colors.light.primary} />
@@ -717,7 +854,7 @@ export default function TicketDetailScreen() {
                 )}
 
                 {/* Rate provider after done */}
-                {(ticket.status === 'done' || ticket.status === 'completed') && provider && (
+                {ticket.status === 'done' && provider && (
                     <Card style={styles.infoCard}>
                         <View style={styles.completionHeader}>
                             <Star size={18} color="#F59E0B" />
@@ -791,7 +928,7 @@ export default function TicketDetailScreen() {
                 {/* Security Section */}
                 <View style={styles.securityNoticeDetail}>
                     <Shield size={14} color="#9CA3AF" />
-                    <Text style={styles.securityTextDetail}>Pagamento 100% seguro pelo aplicativo</Text>
+                    <Text style={styles.securityTextDetail}>Pagamento combinado e realizado diretamente com o profissional no local.</Text>
                 </View>
 
                 {/* Bottom Spacer for Scroll */}
@@ -1276,5 +1413,91 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#9CA3AF',
         fontWeight: '600',
+    },
+    // Quote and In Progress styles
+    quoteCard: {
+        backgroundColor: '#FFFBEB',
+        borderColor: '#FDE68A',
+        borderWidth: 1,
+    },
+    quoteDesc: {
+        fontSize: 14,
+        color: '#78350F',
+        lineHeight: 20,
+        marginBottom: 12,
+    },
+    quotePriceBox: {
+        backgroundColor: '#FEF3C7',
+        padding: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginBottom: 14,
+    },
+    quotePriceLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#92400E',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+        marginBottom: 4,
+    },
+    quotePriceValue: {
+        fontSize: 26,
+        fontWeight: '900',
+        color: '#78350F',
+    },
+    paymentMethodPrompt: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#92400E',
+        marginBottom: 8,
+    },
+    quoteMethodRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 16,
+    },
+    quoteMethodChip: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingVertical: 10,
+        borderRadius: 10,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    quoteMethodChipActive: {
+        backgroundColor: '#D97706',
+        borderColor: '#D97706',
+    },
+    quoteMethodChipText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#4B5563',
+    },
+    quoteMethodChipTextActive: {
+        color: '#fff',
+    },
+    acceptQuoteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#D97706',
+        height: 48,
+        borderRadius: 12,
+    },
+    acceptQuoteBtnText: {
+        fontSize: 15,
+        fontWeight: '800',
+        color: '#fff',
+    },
+    inProgressCard: {
+        backgroundColor: '#ECFDF5',
+        borderColor: '#A7F3D0',
+        borderWidth: 1,
     },
 });

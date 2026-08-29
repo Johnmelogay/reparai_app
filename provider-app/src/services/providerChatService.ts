@@ -1,7 +1,7 @@
 import { supabase } from '@/services/supabase';
 
 const CHAT_TITLE_PREFIX = 'chat:v1';
-const CHAT_ENABLED_STATUSES = ['accepted', 'paid', 'en_route'];
+const CHAT_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
 
 function normalizeStatus(status: string | null | undefined): string {
     return (status || '').toLowerCase().trim();

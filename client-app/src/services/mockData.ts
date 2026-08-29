@@ -346,8 +346,7 @@ export const MOCK_TICKETS: Ticket[] = [
         updatedAt: new Date().toISOString(),
         providerId: '1',
         providerName: 'Agromotores',
-        ticketFee: 15.00,
-        ticketFeePaid: true,
+        displacementFee: 15.00,
         servicePrice: 150.00,
         estimatedArrival: 15,
         address: 'Av. Carlos Gomes, 123 - Centro',
@@ -359,7 +358,7 @@ export const MOCK_TICKETS: Ticket[] = [
         category: 'hvac',
         track: 'evaluation',
         description: 'Ar condicionado não está gelando, precisa de diagnóstico',
-        status: 'completed',
+        status: 'done',
         createdAt: new Date(Date.now() - 86400000).toISOString(),
         updatedAt: new Date(Date.now() - 86400000).toISOString(),
         providerId: '2',
@@ -407,7 +406,7 @@ export const MOCK_LEDGER: LedgerEntry[] = [
             totalDays: 90,
             activatedAt: new Date(Date.now() - 86400000).toISOString(),
         },
-        status: 'completed',
+        status: 'done',
     },
 ];
 

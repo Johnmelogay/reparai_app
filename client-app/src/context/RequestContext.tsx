@@ -100,20 +100,25 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         if (!raw) return 'idle';
         const lower = raw.toString().toLowerCase();
         const map: Record<string, ContextStatus> = {
-            // Legacy UPPER_CASE → new lowercase
+            draft: 'draft',
             new: 'finding',
-            offered: 'offered',
             finding: 'finding',
-            answered: 'offered',
+            offered: 'offered',
+            answered: 'answered',
             accepted: 'accepted',
-            paid: 'paid',
+            paid: 'confirmed',
+            confirmed: 'confirmed',
             en_route: 'en_route',
-            done: 'completed',
-            completed: 'completed',
+            arrived: 'arrived',
+            quote_provided: 'quote_provided',
+            quote_accepted: 'quote_accepted',
+            done: 'done',
+            completed: 'done',
             canceled: 'canceled',
             cancelled: 'canceled',
-            declined: 'canceled',
-            expired: 'canceled',
+            declined: 'declined',
+            expired: 'expired',
+            disputed: 'disputed',
             drafting: 'drafting',
             idle: 'idle',
         };
@@ -169,6 +174,30 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         };
         hydrate();
     }, []);
+
+    useEffect(() => {
+        const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+            if (event === 'SIGNED_OUT' || !session?.user?.id) {
+                setCurrentTicket(null);
+                setStatus('idle');
+                setCategory(null);
+                setTrack(null);
+                setDescription('');
+                setFunnelAnswers({});
+                setQuestionsHistory([]);
+                setAiResult(null);
+                await removeItem(STORAGE_KEYS.ACTIVE_DRAFT);
+                if (orderChannel) {
+                    supabase.removeChannel(orderChannel);
+                    setOrderChannel(null);
+                }
+            }
+        });
+
+        return () => {
+            authListener.subscription.unsubscribe();
+        };
+    }, [orderChannel]);
 
     const saveDraft = (ticket: Partial<Ticket> | null) => {
         if (ticket) {
@@ -311,18 +340,27 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     // ============================================
 
     const canSeeFullAddress = useCallback((): boolean => {
-        if (!currentTicket) return false;
-        return currentTicket.status === 'paid' ||
-            currentTicket.status === 'en_route' ||
-            currentTicket.status === 'completed';
+        if (!currentTicket?.status) return false;
+        return [
+            'confirmed',
+            'en_route',
+            'arrived',
+            'quote_provided',
+            'quote_accepted',
+            'done',
+        ].includes(currentTicket.status);
     }, [currentTicket]);
 
     const canSeeContact = useCallback((): boolean => {
-        if (!currentTicket) return false;
-        return (currentTicket.status === 'paid' ||
-            currentTicket.status === 'en_route' ||
-            currentTicket.status === 'completed') &&
-            currentTicket.ticketFeePaid === true;
+        if (!currentTicket?.status) return false;
+        return [
+            'confirmed',
+            'en_route',
+            'arrived',
+            'quote_provided',
+            'quote_accepted',
+            'done',
+        ].includes(currentTicket.status);
     }, [currentTicket]);
 
     const startDraft = useCallback((cat: string, t: TicketTrack) => {
@@ -582,16 +620,22 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         }
     }, [currentTicket, locationContext?.selectedLocation, category, description, funnelAnswers, track, subscribeToOrder]);
 
-    const cancelRequest = useCallback(async () => {
+    const cancelRequest = useCallback(async (reason?: string) => {
         // Cancel on the database if we have a real ticket
         if (currentTicket?.id) {
             try {
-                await supabase
-                    .from('requests')
-                    .update({ status: 'canceled' })
-                    .eq('id', currentTicket.id);
-            } catch (e) {
+                const { error } = await supabase.rpc('client_cancel_request', {
+                    p_request_id: currentTicket.id,
+                    p_reason: reason || null,
+                });
+                if (error) {
+                    logger.warn('Failed to cancel request via RPC', { error });
+                    throw error;
+                }
+            } catch (e: any) {
                 logger.error('Failed to cancel request on Supabase', e);
+                Alert.alert('Não foi possível cancelar', e?.message || 'O pedido não pode ser cancelado no estado atual.');
+                return;
             }
         }
 
@@ -613,11 +657,11 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     }, [currentTicket, orderChannel]);
 
     const completeRequest = useCallback(() => {
-        setStatus('completed');
+        setStatus('done');
         if (currentTicket) {
             setCurrentTicket({
                 ...currentTicket,
-                status: 'completed',
+                status: 'done',
                 completedAt: new Date().toISOString(),
             });
         }

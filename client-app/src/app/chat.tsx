@@ -9,10 +9,13 @@ import { FlatList, Image, RefreshControl, StyleSheet, Text, TouchableOpacity, Vi
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 function statusLabel(status: string): string {
-  if (status === 'accepted') return 'Pedido confirmado';
-  if (status === 'paid') return 'Pedido confirmado';
+  if (status === 'accepted' || status === 'confirmed') return 'Pedido confirmado';
   if (status === 'en_route') return 'Prestador a caminho';
-  if (status === 'completed') return 'Atendimento finalizado';
+  if (status === 'arrived') return 'Prestador no local';
+  if (status === 'quote_provided') return 'Orçamento enviado';
+  if (status === 'quote_accepted') return 'Serviço em execução';
+  if (status === 'done' || status === 'completed') return 'Atendimento finalizado';
+  if (status === 'canceled') return 'Cancelado';
   return 'Acompanhando pedido';
 }
 

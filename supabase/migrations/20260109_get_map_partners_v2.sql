@@ -25,9 +25,9 @@ AS $$
 BEGIN
     RETURN QUERY
     SELECT 
-        pa.id,
-        COALESCE(pa.full_name, 'Prestador') AS full_name,
-        COALESCE(pa.avatar_url, '') AS avatar_url,
+        pr.id,
+        COALESCE(pr.full_name, 'Prestador') AS full_name,
+        COALESCE(pr.avatar_url, '') AS avatar_url,
         COALESCE(pa.service_category, 'Geral') AS service_category,
         COALESCE(pa.rating, 5.0) AS rating,
         st_y(pa.location::geometry) AS lat,
@@ -40,6 +40,8 @@ BEGIN
         pa.base_fee AS hourly_rate
     FROM 
         public.partners pa
+    JOIN 
+        public.profiles pr ON pr.id = pa.id
     WHERE 
         ST_DWithin(
             pa.location::geography,

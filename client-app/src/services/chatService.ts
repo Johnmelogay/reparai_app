@@ -1,7 +1,7 @@
 import { supabase } from '@/services/supabase';
 
 const CHAT_TITLE_PREFIX = 'chat:v1';
-const CHAT_ENABLED_STATUSES = ['accepted', 'paid', 'en_route'];
+const CHAT_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
 
 function normalizeStatus(status: string | null | undefined): string {
   return (status || '').toLowerCase().trim();
@@ -46,6 +46,12 @@ export interface ChatThreadDetail {
   providerId: string | null;
   provider: ChatParticipant | null;
   canSend: boolean;
+  /** Set by provider when they mark the job done */
+  doneProviderAt: string | null;
+  /** Set by client when they confirm completion */
+  doneClientAt: string | null;
+  /** Whether the current client has already submitted a review */
+  hasClientReview: boolean;
 }
 
 interface NotificationRow {
@@ -223,28 +229,38 @@ export async function fetchChatInbox(userId: string): Promise<ChatThreadSummary[
 }
 
 export async function fetchChatThread(userId: string, requestId: string): Promise<{ thread: ChatThreadDetail; messages: ChatMessage[] }> {
-  const { data: requestRow, error: requestError } = await supabase
-    .from('requests')
-    .select(`
-      id,
-      status,
-      category,
-      user_text,
-      address,
-      created_at,
-      updated_at,
-      provider_id,
-      partners:provider_id (
+  const [{ data: requestRow, error: requestError }, { data: reviewRow }] = await Promise.all([
+    supabase
+      .from('requests')
+      .select(`
         id,
-        full_name,
-        avatar_url,
-        rating,
-        service_category
-      )
-    `)
-    .eq('id', requestId)
-    .eq('user_id', userId)
-    .single();
+        status,
+        category,
+        user_text,
+        address,
+        created_at,
+        updated_at,
+        provider_id,
+        done_provider_at,
+        done_client_at,
+        partners:provider_id (
+          id,
+          full_name,
+          avatar_url,
+          rating,
+          service_category
+        )
+      `)
+      .eq('id', requestId)
+      .eq('user_id', userId)
+      .single(),
+    supabase
+      .from('reviews')
+      .select('id')
+      .eq('request_id', requestId)
+      .eq('reviewer_id', userId)
+      .maybeSingle(),
+  ]);
 
   if (requestError) {
     throw requestError;
@@ -278,6 +294,9 @@ export async function fetchChatThread(userId: string, requestId: string): Promis
     providerId: requestRow.provider_id,
     provider: requestRow.partners ? mapPartner(requestRow.partners) : null,
     canSend: CHAT_ENABLED_STATUSES.includes(normalizeStatus(requestRow.status)),
+    doneProviderAt: requestRow.done_provider_at ?? null,
+    doneClientAt: requestRow.done_client_at ?? null,
+    hasClientReview: !!reviewRow,
   };
 
   const messages: ChatMessage[] = ((notificationRows || []) as NotificationRow[]).map((row) => {

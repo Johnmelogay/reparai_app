@@ -24,6 +24,7 @@ export default function RootLayout() {
                 <Stack.Screen name="(tabs)" />
                 <Stack.Screen name="request/new/index" />
                 <Stack.Screen name="provider/[id]" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="provider/highlight-checkout" />
                 <Stack.Screen name="ticket/[id]" options={{ presentation: 'modal' }} />
                 <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
               </Stack>

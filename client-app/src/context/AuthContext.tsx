@@ -1,4 +1,5 @@
 import { supabase } from '@/services/supabase';
+import { logger } from '@/utils/logger';
 import { Session, User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -141,13 +142,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 email,
                 options: {
                     shouldCreateUser: true,
-                    // Leaving this out often defaults to OTP code. 
-                    // If you provided an emailRedirectTo, it might force Magic Link.
-                    // To force Code, simply do not provide emailRedirectTo, OR ensure template has {{ .Token }}
                 }
             });
-            return { error };
-        } catch (error) {
+
+            if (error) {
+                const isRateLimit = error.message?.toLowerCase().includes('rate limit') ||
+                    (error as any)?.code === 'over_email_send_rate_limit' ||
+                    (error as any)?.status === 429;
+
+                // Log error code and status safely without exposing tokens or email
+                logger.warn('[Auth] signInWithEmail failed', {
+                    code: (error as any)?.code || error.name,
+                    status: (error as any)?.status || 400
+                });
+
+                let friendlyMessage = error.message;
+                if (isRateLimit) {
+                    // If retry_after header or parameter exists, use it; otherwise generic quota message
+                    const retryAfter = (error as any)?.retry_after || (error as any)?.retryAfter;
+                    if (typeof retryAfter === 'number' && retryAfter > 0) {
+                        friendlyMessage = `Limite de envio atingido. Aguarde ${retryAfter} segundos antes de tentar novamente.`;
+                    } else {
+                        friendlyMessage = 'O limite temporário de envio de e-mails foi atingido. Tente novamente mais tarde.';
+                    }
+                }
+
+                return { error: { ...error, message: friendlyMessage, isRateLimit } };
+            }
+
+            return { error: null };
+        } catch (error: any) {
+            logger.warn('[Auth] signInWithEmail unexpected error', {
+                name: error?.name || 'Error'
+            });
             return { error };
         }
     };
@@ -167,7 +194,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     const signOut = async () => {
-        await supabase.auth.signOut();
+        try {
+            const { clearUserStorage } = await import('@/utils/storage');
+            await clearUserStorage(user?.id);
+            await supabase.auth.signOut();
+        } catch (e) {
+            console.warn('[AuthContext] Sign out error:', e);
+            await supabase.auth.signOut();
+        }
     };
 
     const isGuest = !session;

@@ -2,8 +2,9 @@ import { Colors, Layout } from '@/constants/Colors';
 import { ProviderServiceItem, useProviderServices } from '@/hooks/useProviderServices';
 import { supabase } from '@/services/supabase';
 import { Image as ExpoImage } from 'expo-image';
+import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { Briefcase, CalendarDays, CheckCircle2, Clock3, MapPin, MessageCircle, Navigation, Star, ThumbsUp } from 'lucide-react-native';
+import { Briefcase, CalendarDays, CheckCircle2, Clock3, FileText, MapPin, MessageCircle, Navigation, Star, ThumbsUp } from 'lucide-react-native';
 import React, { useMemo, useState } from 'react';
 import {
     ActivityIndicator,
@@ -19,23 +20,30 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-type ServiceFilter = 'in_progress' | 'done';
+type ServiceFilter = 'in_progress' | 'done' | 'canceled';
 
 function statusLabel(status: string): string {
-    if (status === 'accepted') return 'Confirmado';
-    if (status === 'paid') return 'Pago';
+    if (status === 'accepted') return 'Aceito';
+    if (status === 'confirmed') return 'Confirmado';
     if (status === 'en_route') return 'A caminho';
+    if (status === 'arrived') return 'No local';
+    if (status === 'quote_provided') return 'Orçamento enviado';
+    if (status === 'quote_accepted') return 'Em execução';
     if (status === 'done') return 'Concluído';
-    if (status === 'completed') return 'Concluído';
     if (status === 'canceled') return 'Cancelado';
+    if (status === 'declined') return 'Recusado';
+    if (status === 'expired') return 'Expirado';
+    if (status === 'disputed') return 'Em disputa';
     return 'Em análise';
 }
 
 function statusColor(status: string): string {
-    if (status === 'accepted' || status === 'paid') return '#0369A1';
+    if (status === 'accepted' || status === 'confirmed') return '#0369A1';
     if (status === 'en_route') return Colors.light.primary;
-    if (status === 'done' || status === 'completed') return Colors.light.success;
-    if (status === 'canceled') return Colors.light.danger;
+    if (status === 'arrived' || status === 'quote_provided') return '#F59E0B'; // Amber
+    if (status === 'quote_accepted') return '#059669'; // Emerald
+    if (status === 'done') return Colors.light.success;
+    if (status === 'canceled' || status === 'declined' || status === 'disputed') return Colors.light.danger;
     return Colors.light.textMuted;
 }
 
@@ -53,6 +61,7 @@ function formatWhen(dateStr: string): string {
 
 function EmptyState({ filter }: { filter: ServiceFilter }) {
     const done = filter === 'done';
+    const in_progress = filter === 'in_progress';
 
     return (
         <View style={styles.emptyContainer}>
@@ -63,11 +72,11 @@ function EmptyState({ filter }: { filter: ServiceFilter }) {
                     <Briefcase size={38} color={Colors.light.textMuted} />
                 )}
             </View>
-            <Text style={styles.emptyTitle}>{done ? 'Nenhum serviço finalizado' : 'Nenhum serviço em andamento'}</Text>
+            <Text style={styles.emptyTitle}>{in_progress ? 'Nenhum serviço em andamento' : done ? 'Nenhum serviço finalizado' : 'Nenhum serviço cancelado'}</Text>
             <Text style={styles.emptySubtitle}>
-                {done
-                    ? 'Quando um atendimento for concluído, ele aparecerá aqui.'
-                    : 'Assim que um cliente confirmar sua oferta, o serviço aparecerá nesta lista.'}
+                {in_progress
+                    ? 'Assim que um cliente confirmar sua oferta, o serviço aparecerá nesta lista.'
+                    : 'Os serviços aparecerão de acordo com seus status nas abas correspondentes.'}
             </Text>
         </View>
     );
@@ -147,6 +156,8 @@ function ServiceCard({
     item,
     onOpenChat,
     onSetEnRoute,
+    onSetArrived,
+    onOpenQuoteModal,
     onConfirmDone,
     onRate,
     actionLoading,
@@ -154,15 +165,20 @@ function ServiceCard({
     item: ProviderServiceItem;
     onOpenChat: (requestId: string) => void;
     onSetEnRoute: (requestId: string) => void;
+    onSetArrived: (requestId: string) => void;
+    onOpenQuoteModal: (item: ProviderServiceItem) => void;
     onConfirmDone: (requestId: string) => void;
     onRate: (item: ProviderServiceItem) => void;
     actionLoading: string | null;
 }) {
     const isLoading = actionLoading === item.id;
-    const canGoEnRoute = item.status === 'paid';
-    const canConfirmDone = item.status === 'en_route' && !item.done_provider_at;
-    const waitingClient = item.status === 'en_route' && !!item.done_provider_at && !item.done_client_at;
-    const isDone = item.status === 'done' || item.status === 'completed';
+    const canGoEnRoute = item.status === 'confirmed';
+    const canArrive = item.status === 'en_route';
+    const canSubmitQuote = item.status === 'arrived';
+    const waitingClientQuote = item.status === 'quote_provided';
+    const canConfirmDone = item.status === 'quote_accepted' && !item.done_provider_at;
+    const waitingClient = item.status === 'quote_accepted' && !!item.done_provider_at && !item.done_client_at;
+    const isDone = item.status === 'done';
 
     return (
         <View style={styles.card}>
@@ -241,6 +257,49 @@ function ServiceCard({
                     </TouchableOpacity>
                 )}
 
+                {canArrive && (
+                    <TouchableOpacity
+                        style={styles.doneBtn}
+                        onPress={() => onSetArrived(item.id)}
+                        disabled={isLoading}
+                        activeOpacity={0.85}
+                    >
+                        {isLoading ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                            <>
+                                <MapPin size={15} color="#fff" />
+                                <Text style={styles.doneBtnText}>Cheguei no local</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
+                )}
+
+                {canSubmitQuote && (
+                    <TouchableOpacity
+                        style={styles.enRouteBtn}
+                        onPress={() => onOpenQuoteModal(item)}
+                        disabled={isLoading}
+                        activeOpacity={0.85}
+                    >
+                        {isLoading ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                            <>
+                                <FileText size={15} color="#fff" />
+                                <Text style={styles.enRouteBtnText}>Enviar Orçamento</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
+                )}
+
+                {waitingClientQuote && (
+                    <View style={styles.waitingBanner}>
+                        <Clock3 size={14} color="#D97706" />
+                        <Text style={[styles.waitingBannerText, { color: '#B45309' }]}>Aguardando aprovação do orçamento pelo cliente.</Text>
+                    </View>
+                )}
+
                 {canConfirmDone && (
                     <TouchableOpacity
                         style={styles.doneBtn}
@@ -284,13 +343,46 @@ function ServiceCard({
 export default function ServicesScreen() {
     const router = useRouter();
     const [filter, setFilter] = useState<ServiceFilter>('in_progress');
-    const { inProgress, done, loading, error, refetch } = useProviderServices();
+    const { inProgress = [], done = [], canceled = [], loading, error, refetch } = useProviderServices();
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [ratingTarget, setRatingTarget] = useState<ProviderServiceItem | null>(null);
 
-    const data = useMemo(() => (filter === 'in_progress' ? inProgress : done), [done, filter, inProgress]);
+    const [quoteTarget, setQuoteTarget] = useState<ProviderServiceItem | null>(null);
+    const [quoteValue, setQuoteValue] = useState('');
+
+    const data = useMemo(() => {
+        if (filter === 'in_progress') return inProgress;
+        if (filter === 'done') return done;
+        return canceled;
+    }, [filter, inProgress, done, canceled]);
+
+    // Battery Fix: Location broadcast only when en_route
+    const hasEnRouteJob = inProgress.some(item => item.status === 'en_route');
+
+    React.useEffect(() => {
+        if (!hasEnRouteJob) return;
+
+        const syncLocation = async () => {
+            try {
+                const currentPosition = await Location.getCurrentPositionAsync({
+                    accuracy: Location.Accuracy.Balanced,
+                });
+                await supabase.rpc('set_my_partner_location', {
+                    input_lat: currentPosition.coords.latitude,
+                    input_long: currentPosition.coords.longitude,
+                });
+            } catch (err) {
+                console.warn('[active] Failed to sync en_route location:', err);
+            }
+        };
+
+        syncLocation();
+        const interval = setInterval(syncLocation, 30_000);
+        return () => clearInterval(interval);
+    }, [hasEnRouteJob]);
 
     const handleSetEnRoute = async (requestId: string) => {
+        if (actionLoading) return;
         setActionLoading(requestId);
         try {
             const { error: err } = await supabase.rpc('provider_set_en_route', { p_request_id: requestId });
@@ -303,7 +395,49 @@ export default function ServicesScreen() {
         }
     };
 
+    const handleSetArrived = async (requestId: string) => {
+        if (actionLoading) return;
+        setActionLoading(requestId);
+        try {
+            const { error: err } = await supabase.rpc('provider_set_arrived', { p_request_id: requestId });
+            if (err) throw err;
+            refetch();
+        } catch (e: any) {
+            Alert.alert('Erro', e?.message || 'Não foi possível marcar como cheguei.');
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const handleSubmitQuote = async () => {
+        if (!quoteTarget || actionLoading) return;
+        
+        const price = Number.parseFloat(quoteValue.replace(',', '.'));
+        if (!Number.isFinite(price) || price <= 0 || price > 50000) {
+            Alert.alert('Erro', 'Por favor, informe um valor de orçamento válido (maior que zero).');
+            return;
+        }
+
+        const targetId = quoteTarget.id;
+        setActionLoading(targetId);
+        setQuoteTarget(null);
+        try {
+            const { error: err } = await supabase.rpc('provider_submit_quote', {
+                p_request_id: targetId,
+                p_quote_price: price,
+            });
+            if (err) throw err;
+            setQuoteValue('');
+            refetch();
+        } catch (e: any) {
+            Alert.alert('Erro', e?.message || 'Não foi possível enviar o orçamento.');
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
     const handleConfirmDone = async (requestId: string) => {
+        if (actionLoading) return;
         Alert.alert(
             'Finalizar serviço',
             'Confirma que o serviço foi concluído? O cliente também precisará confirmar.',
@@ -333,8 +467,6 @@ export default function ServicesScreen() {
         try {
             const { error: err } = await supabase.rpc('submit_review', {
                 p_request_id: ratingTarget.id,
-                p_reviewee_id: ratingTarget.user_id,
-                p_role: 'provider',
                 p_rating: rating,
                 p_comment: comment || null,
             });
@@ -352,7 +484,7 @@ export default function ServicesScreen() {
             <View style={styles.header}>
                 <Text style={styles.title}>Serviços</Text>
                 <Text style={styles.subtitle}>
-                    {filter === 'in_progress' ? `${inProgress.length} em andamento` : `${done.length} finalizados`}
+                    {filter === 'in_progress' ? `${inProgress.length} em andamento` : filter === 'done' ? `${done.length} finalizados` : `${canceled.length} cancelados`}
                 </Text>
             </View>
 
@@ -361,13 +493,19 @@ export default function ServicesScreen() {
                     style={[styles.segmentBtn, filter === 'in_progress' && styles.segmentBtnActive]}
                     onPress={() => setFilter('in_progress')}
                 >
-                    <Text style={[styles.segmentText, filter === 'in_progress' && styles.segmentTextActive]}>Em andamento</Text>
+                    <Text style={[styles.segmentText, filter === 'in_progress' && styles.segmentTextActive]}>Andamento</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={[styles.segmentBtn, filter === 'done' && styles.segmentBtnActive]}
                     onPress={() => setFilter('done')}
                 >
-                    <Text style={[styles.segmentText, filter === 'done' && styles.segmentTextActive]}>Feitos</Text>
+                    <Text style={[styles.segmentText, filter === 'done' && styles.segmentTextActive]}>Finalizados</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, filter === 'canceled' && styles.segmentBtnActive]}
+                    onPress={() => setFilter('canceled')}
+                >
+                    <Text style={[styles.segmentText, filter === 'canceled' && styles.segmentTextActive]}>Cancelados</Text>
                 </TouchableOpacity>
             </View>
 
@@ -391,6 +529,8 @@ export default function ServicesScreen() {
                             item={item}
                             onOpenChat={(requestId) => router.push(`/chat/${requestId}`)}
                             onSetEnRoute={handleSetEnRoute}
+                            onSetArrived={handleSetArrived}
+                            onOpenQuoteModal={setQuoteTarget}
                             onConfirmDone={handleConfirmDone}
                             onRate={setRatingTarget}
                             actionLoading={actionLoading}
@@ -414,6 +554,37 @@ export default function ServicesScreen() {
                 onSubmit={handleSubmitRating}
                 onClose={() => setRatingTarget(null)}
             />
+
+            <Modal visible={!!quoteTarget} transparent animationType="fade" onRequestClose={() => setQuoteTarget(null)}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCard}>
+                        <Text style={styles.modalTitle}>Orçamento Final</Text>
+                        <Text style={styles.modalSubtitle}>Insira o valor do serviço e peças para aprovação do cliente.</Text>
+                        
+                        <TextInput
+                            style={[styles.commentInput, { minHeight: 50, fontSize: 18, fontWeight: 'bold' }]}
+                            placeholder="Valor R$"
+                            placeholderTextColor="#9CA3AF"
+                            value={quoteValue}
+                            onChangeText={setQuoteValue}
+                            keyboardType="decimal-pad"
+                        />
+                        
+                        <TouchableOpacity
+                            style={[styles.modalSubmitBtn, actionLoading === quoteTarget?.id && { opacity: 0.6 }]}
+                            onPress={handleSubmitQuote}
+                            disabled={actionLoading === quoteTarget?.id}
+                            activeOpacity={0.85}
+                        >
+                            <Text style={styles.modalSubmitText}>Enviar Orçamento</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => setQuoteTarget(null)} style={styles.modalSkipBtn} activeOpacity={0.7}>
+                            <Text style={styles.modalSkipText}>Cancelar</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }

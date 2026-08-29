@@ -1,6 +1,7 @@
 import { NetworkErrorBanner } from '@/components/ui/NetworkErrorBanner';
 import { usePartners } from '@/hooks/usePartners';
 import { logger } from '@/utils/logger';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -15,11 +16,12 @@ import {
     X,
     Zap
 } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Dimensions, FlatList, Image, Platform, Animated as RNAnimated, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Dimensions, FlatList, Image, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import Reanimated, { Extrapolation, FadeIn, FadeOut, interpolate, useAnimatedProps, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Reanimated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AddressSelectionModal from '@/components/AddressSelectionModal';
@@ -100,7 +102,7 @@ export default function HomeScreen() {
 
     logger.info('Home: Providers recebidos', { count: nearbyProviders?.length ?? 0 });
 
-    const { location, selectedLocation, address: currentAddress, isLoading: isLoadingLocation, refreshLocation, selectLocation } = useLocation(); // [UPDATED]
+    const { location, selectedLocation, address: currentAddress, locationSourceType, isLoading: isLoadingLocation, refreshLocation, selectLocation } = useLocation();
     const mapRef = useRef<MapView>(null);
     const [refreshing, setRefreshing] = useState(false);
     const [showInlineOptions, setShowInlineOptions] = useState(false); // [NEW]
@@ -108,12 +110,9 @@ export default function HomeScreen() {
     const [showRecenterBtn, setShowRecenterBtn] = useState(false);
     const insets = useSafeAreaInsets();
 
-    // animation refs
-    const scrollY = useRef(new RNAnimated.Value(0)).current;
-
     // Auto-center map on load
     const mapCentered = useRef(false);
-    useEffect(() => {
+    React.useEffect(() => {
         if (location && mapRef.current && !mapCentered.current) {
             console.log('📍 Auto-centering map on user location');
             mapRef.current.animateToRegion({
@@ -126,7 +125,6 @@ export default function HomeScreen() {
         }
     }, [location]);
     const clientName = 'João';
-    // Fade out elements when sheet is at the top
 
     const { startDraft, status: requestStatus, category: requestCategory } = useRequest();
     const filteredProviders = useMemo(() => {
@@ -144,187 +142,34 @@ export default function HomeScreen() {
 
         return sorted.slice(0, MAX_MAP_MARKERS);
     }, [nearbyProviders]);
-    const sheetPeek = Math.round(height * 0.52);
 
-    // --- Bottom Sheet Logic (Reanimated) ---
-    const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-    // Snap Points
-    const TOP_SNAP = -SCREEN_HEIGHT + 100; // Full screen usage (a bit of padding top)
-    const BOTTOM_SNAP = -SCREEN_HEIGHT * 0.45; // Initial Peeking height
+    // --- Bottom Sheet (@gorhom/bottom-sheet) ---
+    const bottomSheetRef = useRef<BottomSheet>(null);
+    const snapPoints = useMemo(() => ['12%', '50%', '70%'], []);
+    const animatedIndex = useSharedValue(0);
+    // Tracks sheet top in pixels from screen top; initialized at 12% snap position
+    const animatedPosition = useSharedValue(height * 0.88);
 
-    const translateY = useSharedValue(BOTTOM_SNAP);
-    const context = useSharedValue({ y: 0, gestureOffset: -1 });
-    const scrollOffset = useSharedValue(0);
+    // FAB container stays above the sheet handle, tracks animatedPosition
+    const rFabContainerStyle = useAnimatedStyle(() => ({
+        top: animatedPosition.value - 56,
+    }));
 
-
-
-    // Scroll handler for nested scroll
-    const scrollHandler = useAnimatedScrollHandler({
-        onScroll: (event) => {
-            scrollOffset.value = event.contentOffset.y;
-        },
-    });
-
-    // Connect ScrollView's native gesture to the sheet pan for proper handoff
-    const scrollGesture = Gesture.Native();
-
-    const panGesture = Gesture.Pan()
-        .onStart(() => {
-            // gestureOffset === -1 means "this gesture did not take control of the sheet"
-            context.value = { y: translateY.value, gestureOffset: -1 };
-        })
-        .onUpdate((event) => {
-            const isAtScrollTop = scrollOffset.value <= 0.5;
-            const isPullingDown = event.translationY > 0;
-            const isPushingUp = event.translationY < 0;
-
-            const isExpanded = translateY.value <= TOP_SNAP + 5;
-
-            // Sheet vs Scroll handoff:
-            // - When expanded: only allow pulling the sheet DOWN if the scroll content is at the very top.
-            // - When not expanded: allow dragging the sheet BOTH directions (UP to expand, DOWN to collapse)
-            //   even if the scroll content is not at the top.
-            const shouldMoveSheet = isExpanded
-                ? isAtScrollTop && isPullingDown
-                : isPullingDown || isPushingUp;
-
-            if (!shouldMoveSheet) {
-                // Ensure we do not "snap" on end when we never moved the sheet in this gesture
-                context.value.gestureOffset = -1;
-                return;
-            }
-
-            // If we just entered the 'sheet moving' state in this gesture, lock a baseline
-            if (context.value.gestureOffset === -1) {
-                context.value.gestureOffset = event.translationY;
-                context.value.y = translateY.value;
-            }
-
-            const deltaY = event.translationY - context.value.gestureOffset;
-            let newValue = context.value.y + deltaY;
-
-            // Limits with rubber banding
-            if (newValue < TOP_SNAP) {
-                newValue = TOP_SNAP + (newValue - TOP_SNAP) * 0.2;
-            }
-            if (newValue > BOTTOM_SNAP) {
-                newValue = BOTTOM_SNAP + (newValue - BOTTOM_SNAP) * 0.2;
-            }
-
-            translateY.value = newValue;
-        })
-        // This is the key: let ScrollView and sheet pan cooperate
-        .simultaneousWithExternalGesture(scrollGesture)
-        .onEnd((event) => {
-            // If we never moved the sheet during this gesture, do nothing (user was scrolling)
-            const didMoveSheet = context.value.gestureOffset !== -1;
-            context.value.gestureOffset = -1;
-            if (!didMoveSheet) return;
-
-            const current = translateY.value;
-            const mid = (TOP_SNAP + BOTTOM_SNAP) / 2;
-            const VELOCITY_THRESHOLD = 1100;
-
-            const isFlingUp = event.velocityY < -VELOCITY_THRESHOLD;
-            const isFlingDown = event.velocityY > VELOCITY_THRESHOLD;
-            const isPastMidPoint = current < mid;
-
-            if (isFlingUp) {
-                translateY.value = withSpring(TOP_SNAP, { damping: 50, stiffness: 400 });
-            } else if (isFlingDown) {
-                translateY.value = withSpring(BOTTOM_SNAP, { damping: 50, stiffness: 400 });
-            } else if (isPastMidPoint) {
-                translateY.value = withSpring(TOP_SNAP, { damping: 50, stiffness: 400 });
-            } else {
-                translateY.value = withSpring(BOTTOM_SNAP, { damping: 50, stiffness: 400 });
-            }
-        });
-
-    const edgeStartX = useSharedValue(0);
-    const edgeSwipeGesture = Gesture.Pan()
-        .onBegin((event) => {
-            edgeStartX.value = event.x;
-        })
-        .activeOffsetX(20)
-        .onEnd((event) => {
-            const isExpanded = translateY.value <= TOP_SNAP + 50;
-            if (isExpanded && edgeStartX.value < 60 && (event.translationX > 80 || event.velocityX > 700)) {
-                translateY.value = withSpring(BOTTOM_SNAP, { damping: 50, stiffness: 400 });
-            }
-        });
-
-    const combinedGesture = Gesture.Simultaneous(panGesture, edgeSwipeGesture);
-
-    const rBottomSheetStyle = useAnimatedStyle(() => {
-        return {
-            transform: [{ translateY: translateY.value }],
-        };
-    });
-
-    // Fade out elements when sheet is at the top
-    const rElementFadeStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(
-            translateY.value,
-            [TOP_SNAP + 100, TOP_SNAP],
-            [1, 0],
-            Extrapolation.CLAMP
-        );
-        return { opacity };
-    });
-
-    const rSheetFinishStyle = useAnimatedStyle(() => {
-        // Remove shadow and radius when fully expanded for seamless look
-        const progress = interpolate(
-            translateY.value,
-            [TOP_SNAP + 50, TOP_SNAP],
-            [0, 1],
-            Extrapolation.CLAMP
-        );
-
-        return {
-            borderTopLeftRadius: interpolate(progress, [0, 1], [28, 0]),
-            borderTopRightRadius: interpolate(progress, [0, 1], [28, 0]),
-            shadowOpacity: interpolate(progress, [0, 1], [0.06, 0]),
-            elevation: interpolate(progress, [0, 1], [6, 0]),
-        };
-    });
-
-    // Control ScrollView enablement: Disable scroll when not fully expanded to allow easy "fling to open"
-    const rScrollViewProps = useAnimatedProps(() => {
-        return {
-            scrollEnabled: translateY.value <= TOP_SNAP + 50,
-        };
-    });
+    // Recenter button fades in/out without mount/unmount to avoid layout glitches
+    const recenterVisible = useSharedValue(0);
+    React.useEffect(() => {
+        recenterVisible.value = withTiming(showRecenterBtn ? 1 : 0, { duration: 150 });
+    }, [showRecenterBtn]);
+    const rRecenterStyle = useAnimatedStyle(() => ({
+        opacity: recenterVisible.value,
+        pointerEvents: recenterVisible.value > 0.1 ? 'auto' : 'none',
+    }));
 
 
-
-    // Background Opacity for "White Mode"
-    const rBackgroundStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(
-            translateY.value,
-            [BOTTOM_SNAP, TOP_SNAP],
-            [0, 1],
-            Extrapolation.CLAMP
-        );
-        return {
-            opacity,
-            pointerEvents: opacity > 0.9 ? 'auto' : 'none',
-        };
-    });
-
-    // Floating Map Button - appears when sheet is fully expanded
-    const rFloatingMapBtnStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(
-            translateY.value,
-            [TOP_SNAP + 100, TOP_SNAP + 20],
-            [0, 1],
-            Extrapolation.CLAMP
-        );
-        return {
-            opacity,
-            pointerEvents: opacity > 0.5 ? 'auto' : 'none',
-        };
-    });
+    // Logo fades out as sheet expands
+    const rLogoFadeStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(animatedIndex.value, [0, 0.7], [1, 1], Extrapolation.CLAMP),
+    }));
 
     // Effect to animate map to SELECTED location (primarily)
     React.useEffect(() => {
@@ -359,12 +204,12 @@ export default function HomeScreen() {
         }
     };
 
-    const handleCollapseSheet = () => {
-        translateY.value = withSpring(BOTTOM_SNAP, { damping: 50, stiffness: 400 });
-    };
+    const handleCollapseSheet = useCallback(() => {
+        bottomSheetRef.current?.snapToIndex(0);
+    }, []);
 
     const handleRegionChangeComplete = () => {
-        // Simple logic: if user drags map, show button. 
+        // Simple logic: if user drags map, show button.
         // Ideally we check distance from current location, but for now any manual move triggers it.
         setShowRecenterBtn(true);
     };
@@ -437,34 +282,6 @@ export default function HomeScreen() {
         return { image };
     }, []);
 
-    // Fade in sticky header only when sheet is essentially touching the top
-    const headerFadeInStart = sheetPeek - 100;
-    const headerFadeInEnd = sheetPeek - 20;
-
-    const stickyHeaderOpacity = scrollY.interpolate({
-        inputRange: [headerFadeInStart, headerFadeInEnd],
-        outputRange: [0, 1],
-        extrapolate: 'clamp',
-    });
-
-    const stickyHeaderTranslateY = scrollY.interpolate({
-        inputRange: [headerFadeInStart, headerFadeInEnd],
-        outputRange: [-8, 0],
-        extrapolate: 'clamp',
-    });
-
-    const greetingOpacity = scrollY.interpolate({
-        inputRange: [headerFadeInStart, sheetPeek - 40],
-        outputRange: [1, 0],
-        extrapolate: 'clamp',
-    });
-
-    const logoOpacity = scrollY.interpolate({
-        inputRange: [sheetPeek - 300, sheetPeek - 120],
-        outputRange: [1, 0],
-        extrapolate: 'clamp',
-    });
-
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
         await refetch();
@@ -489,17 +306,19 @@ export default function HomeScreen() {
                 />
 
                 {/* Fixed Logo (Fades out when sheet moves up) */}
-                <RNAnimated.View
-                    style={{
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        position: 'absolute',
-                        top: insets.top + (Platform.OS === 'ios' ? 0 : 6),
-                        alignSelf: 'center',
-                        zIndex: 100,
-                        opacity: logoOpacity,
-                    }}
+                <Reanimated.View
+                    style={[
+                        {
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            position: 'absolute',
+                            top: insets.top + (Platform.OS === 'ios' ? 0 : 6),
+                            alignSelf: 'center',
+                            zIndex: 100,
+                        },
+                        rLogoFadeStyle,
+                    ]}
                 >
                     <ExpoImage
                         source={require('../../../assets/images/logo.svg')}
@@ -517,13 +336,13 @@ export default function HomeScreen() {
                         onPress={() => setAddressModalVisible(true)}
                         activeOpacity={0.8}
                     >
-                        <MapPin size={14} color={Colors.light.accent} />
+                        <MapPin size={14} color={locationSourceType === 'saved_address' ? Colors.light.primary : Colors.light.accent} />
                         <Text style={styles.addressText} numberOfLines={1}>
                             {isLoadingLocation ? 'Localizando...' : currentAddress}
                         </Text>
                         <ChevronRight size={14} color={Colors.light.textSecondary} style={{ marginLeft: 4 }} />
                     </TouchableOpacity>
-                </RNAnimated.View>
+                </Reanimated.View>
 
                 {/* GPS Shortcut FAB */}
 
@@ -668,29 +487,32 @@ export default function HomeScreen() {
                         </View>
                     )}
 
-                    {/* GPS Shortcut FAB - Positioned just above the sheet */}
-
-                    {showRecenterBtn && (
-                        <Reanimated.View
-                            entering={FadeIn.duration(100)}
-                            exiting={FadeOut.duration(100)}
-                            style={{
+                    {/* Floating FABs — anchored to sheet top-right corner */}
+                    <Reanimated.View
+                        pointerEvents="box-none"
+                        style={[
+                            {
                                 position: 'absolute',
-                                right: 20,
-                                bottom: (height * 0.45) + 30, // Align with sheet top (approx)
-                                zIndex: 10,
-                                marginBottom: -100,
-                            }}
-                        >
+                                right: 16,
+                                zIndex: 999,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: 8,
+                            },
+                            rFabContainerStyle,
+                        ]}
+                    >
+                        {/* Recenter FAB — fades in/out via shared value, never unmounts */}
+                        <Reanimated.View style={rRecenterStyle}>
                             <TouchableOpacity
                                 style={{
                                     backgroundColor: '#fff',
                                     borderRadius: 30,
-                                    width: 50,
-                                    height: 50,
+                                    width: 44,
+                                    height: 44,
                                     alignItems: 'center',
                                     justifyContent: 'center',
-                                    shadowColor: "#000",
+                                    shadowColor: '#000',
                                     shadowOffset: { width: 0, height: 4 },
                                     shadowOpacity: 0.2,
                                     shadowRadius: 5,
@@ -698,329 +520,254 @@ export default function HomeScreen() {
                                 }}
                                 onPress={handleGpsShortcut}
                             >
-                                <Locate size={22} color={Colors.light.primary} strokeWidth={2.5} />
+                                <Locate size={20} color={Colors.light.primary} strokeWidth={2.5} />
                             </TouchableOpacity>
                         </Reanimated.View>
-                    )}
 
-                    {/* White Background Overlay (Fades in on Expand) */}
-                    <Reanimated.View
-                        style={[
-                            StyleSheet.absoluteFillObject,
-                            { backgroundColor: '#FFFFFF', zIndex: 15 },
-                            rBackgroundStyle
-                        ]}
-                    />
-
-                    {/* Floating Map Button - appears when sheet fully expanded */}
-                    <Reanimated.View
-                        style={[
-                            {
-                                position: 'absolute',
-                                bottom: 30 + insets.bottom,
-                                right: 20,
-                                zIndex: 25,
-                                marginBottom: -30
-                            },
-                            rFloatingMapBtnStyle
-                        ]}
-                    >
-                        <TouchableOpacity
-                            style={{
-                                backgroundColor: '#FFFFFF',
-                                borderRadius: 30,
-                                width: 56,
-                                height: 56,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                shadowColor: "#000",
-                                shadowOffset: { width: 0, height: 4 },
-                                shadowOpacity: 0.15,
-                                shadowRadius: 8,
-                                elevation: 6,
-                                borderWidth: 1,
-                                borderColor: 'rgba(0,0,0,0.06)',
-                            }}
-                            onPress={handleCollapseSheet}
-                            activeOpacity={0.7}
-                        >
-                            <Map size={24} color={Colors.light.primary} />
-                        </TouchableOpacity>
+                        {/* Map FAB — visible when sheet reaches 70% snap */}
+                
                     </Reanimated.View>
 
 
-
-                    {/* Bottom Sheet Container - Gesture Handler */}
-                    <GestureDetector gesture={combinedGesture}>
-                        <Reanimated.View
-                            style={[
-                                {
-                                    position: 'absolute',
-                                    width: '100%',
-                                    height: SCREEN_HEIGHT,
-                                    top: SCREEN_HEIGHT, // Start below screen, animate up with translateY (negative)
-                                    backgroundColor: 'transparent',
-                                    zIndex: 20,
-                                },
-                                rBottomSheetStyle
-                            ]}
-                        >
-
+                    {/* Bottom Sheet */}
+                    <BottomSheet
+                        ref={bottomSheetRef}
+                        snapPoints={snapPoints}
+                        index={0}
+                        animatedIndex={animatedIndex}
+                        animatedPosition={animatedPosition}
+                        enablePanDownToClose={false}
+                        style={{ zIndex: 20 }}
+                        onChange={(index) => {
+                            if (index === 0) setShowInlineOptions(false);
+                        }}
+                        overDragResistanceFactor={4}
+                        handleIndicatorStyle={{
+                            backgroundColor: '#E2E8F0',
+                            width: 40,
+                            height: 5,
+                        }}
+                        backgroundStyle={{
+                            backgroundColor: '#FFFFFF',
+                            borderTopLeftRadius: 28,
+                            borderTopRightRadius: 28,
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: -2 },
+                            shadowOpacity: 0.06,
+                            shadowRadius: 12,
+                            elevation: 6,
+                        }}
+                    >
+                        {/* Static CTA Header (pinned above scroll) */}
+                        <View style={{ width: '100%', paddingHorizontal: 20, marginBottom: 20 }}>
                             <Reanimated.View style={[
-                                styles.sheet,
-                                { flex: 1, paddingBottom: 0 },
-                                rSheetFinishStyle
+                                { overflow: 'hidden', width: '100%' },
+                                rInlineContainerStyle
                             ]}>
-                                {/* Drag Handle */}
-                                <Reanimated.View style={[{ width: '100%', alignItems: 'center', paddingBottom: 12, marginTop: -6 }, rElementFadeStyle]}>
-                                    <View style={{ width: 40, height: 5, backgroundColor: '#E2E8F0', borderRadius: 2.5 }} />
-                                </Reanimated.View>
-
-                                {/* Static Header CTA - Stays at top */}
-                                <View style={{ width: '100%', marginBottom: 20 }}>
-                                    <Reanimated.View style={[
-                                        { overflow: 'hidden', width: '100%' },
-                                        rInlineContainerStyle
-                                    ]}>
-                                        {!showInlineOptions ? (
-                                            <TouchableOpacity
-                                                style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-                                                onPress={() => setShowInlineOptions(true)}
-                                                activeOpacity={0.85}
-                                            >
-                                                <Reanimated.Text style={[
-                                                    { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold', letterSpacing: 0.3 },
-                                                    rCtaTextStyle
-                                                ]}>Preciso de Reparo!</Reanimated.Text>
-                                            </TouchableOpacity>
-                                        ) : (
-                                            <Reanimated.View style={[{ flex: 1 }, rOptionsStyle]}>
-                                                {/* Cabeçalho das Opções: Ajuste margens e cores aqui */}
-                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                                                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#FFFFFF' }}>Como podemos ajudar?</Text>
-                                                    <TouchableOpacity
-                                                        onPress={() => setShowInlineOptions(false)}
-                                                        style={{ backgroundColor: 'rgba(255,255,255,0.2)', padding: 6, borderRadius: 20 }}
-                                                    >
-                                                        <X size={18} color="#FFFFFF" />
-                                                    </TouchableOpacity>
-                                                </View>
-
-                                                {[
-                                                    { id: 'instant', title: 'Hoje (Urgente)', sub: 'Preciso de ajuda agora', icon: Zap, color: '#EF4444', bg: '#FFFFFF' },
-                                                    { id: 'evaluation', title: 'Avaliar', sub: 'Quero um orçamento', icon: ClipboardList, color: '#3B82F6', bg: '#FFFFFF' },
-                                                    { id: 'workshop', title: 'Oficina', sub: 'Levar para oficina', icon: Wrench, color: '#8B5CF6', bg: '#FFFFFF' }
-                                                ].map((opt) => {
-                                                    const Icon = opt.icon;
-                                                    return (
-                                                        <TouchableOpacity
-                                                            key={opt.id}
-                                                            style={{
-                                                                flexDirection: 'row',
-                                                                alignItems: 'center',
-                                                                // Ajuste a opacidade do fundo (0.15) e borda (0.1) das opções
-                                                                backgroundColor: 'rgba(255,255,255,0.15)',
-                                                                borderRadius: 16,
-                                                                padding: 14,
-                                                                marginBottom: 10, // Margem entre as opções
-                                                                borderWidth: 1,
-                                                                borderColor: 'rgba(255,255,255,0.1)'
-                                                            }}
-                                                            onPress={() => handleOpenRequest(opt.id)}
-                                                            activeOpacity={0.7}
-                                                        >
-                                                            {/* Ícone fixo em fundo branco para contraste */}
-                                                            <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-                                                                <Icon size={22} color={opt.color} />
-                                                            </View>
-                                                            <View style={{ flex: 1 }}>
-                                                                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#FFFFFF' }}>{opt.title}</Text>
-                                                                <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>{opt.sub}</Text>
-                                                            </View>
-                                                            <ChevronRight size={18} color="rgba(255,255,255,0.5)" />
-                                                        </TouchableOpacity>
-                                                    );
-                                                })}
-                                            </Reanimated.View>
-                                        )}
-                                    </Reanimated.View>
-                                </View>
-
-                                {/* Scrollable Content Area */}
-                                <GestureDetector gesture={scrollGesture}>
-                                    <Reanimated.ScrollView
-                                        style={{ flex: 1 }}
-                                        animatedProps={rScrollViewProps}
-                                        onScroll={scrollHandler}
-                                        scrollEventThrottle={16}
-                                        showsVerticalScrollIndicator={false}
-                                        bounces={false}
-                                        overScrollMode="never"
-                                        contentContainerStyle={{ paddingBottom: 40 + insets.bottom }}
+                                {!showInlineOptions ? (
+                                    <TouchableOpacity
+                                        style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+                                        onPress={() => {
+                                            setShowInlineOptions(true);
+                                            bottomSheetRef.current?.snapToIndex(1);
+                                        }}
+                                        activeOpacity={0.85}
                                     >
-                                        {/* Last Services Section */}
-                                        <View style={{ marginBottom: 24 }}>
-                                            <View style={[styles.listHeader, { marginBottom: 12 }]}>
-                                                <Text style={styles.sectionTitle}>Últimos Serviços</Text>
-                                                <TouchableOpacity
-                                                    activeOpacity={0.7}
-                                                    onPress={() => router.push('/(tabs)/requests')}
-                                                >
-                                                    <Text style={styles.seeAll}>Ver histórico</Text>
-                                                </TouchableOpacity>
-                                            </View>
-                                            <FlatList
-                                                horizontal
-                                                showsHorizontalScrollIndicator={false}
-                                                data={[
-                                                    {
-                                                        id: 'h1',
-                                                        orderIdShort: '2841',
-                                                        title: 'Ar-condicionado não gela',
-                                                        category: 'Refrigeração • Residencial',
-                                                        providerName: 'Clima Bom',
-                                                        providerRating: 4.9,
-                                                        providerVerified: true,
-                                                        dateTime: 'Ontem • 14:30',
-                                                        locationLabel: 'Porto Velho (Centro)',
-                                                        priceLabel: 'R$ 250',
-                                                        status: 'FINISHED' as const,
-                                                        hasWarranty: true,
-                                                        warrantyStartDate: '2025-12-05T10:00:00Z',
-                                                        warrantyEndDate: '2026-03-05T10:00:00Z', // Clearly ACTIVE
-                                                        icon: require('../../../assets/images/snowflake.png')
-                                                    },
-                                                    {
-                                                        id: 'h2',
-                                                        orderIdShort: '2750',
-                                                        title: 'Troca de Pneu',
-                                                        category: 'Mecânica • Oficina',
-                                                        providerName: 'Borracharia JP',
-                                                        providerRating: 4.7,
-                                                        providerVerified: false,
-                                                        dateTime: '21 Out • 09:15',
-                                                        locationLabel: 'Porto Velho (Liberdade)',
-                                                        priceLabel: 'R$ 80',
-                                                        status: 'FINISHED' as const,
-                                                        hasWarranty: false,
-                                                        icon: require('../../../assets/images/shopping_cart.png')
-                                                    },
-                                                    {
-                                                        id: 'h3',
-                                                        orderIdShort: '2612',
-                                                        title: 'Pintura de Fachada',
-                                                        category: 'Construção • Pintura',
-                                                        providerName: 'Mestre da Cor',
-                                                        providerRating: 4.5,
-                                                        providerVerified: true,
-                                                        dateTime: '15 Out • 08:00',
-                                                        locationLabel: 'Porto Velho (São Cristóvão)',
-                                                        priceLabel: 'R$ 1.200',
-                                                        status: 'FINISHED' as const,
-                                                        hasWarranty: true,
-                                                        warrantyStartDate: '2025-10-01T08:00:00Z',
-                                                        warrantyEndDate: '2025-12-15T08:00:00Z', // Clearly EXPIRED
-                                                        icon: require('../../../assets/images/wrench_tool.png')
-                                                    },
-                                                ]}
-                                                keyExtractor={item => item.id}
-                                                contentContainerStyle={{ paddingRight: 20 }}
-                                                renderItem={({ item }) => (
-                                                    <ServiceCard
-                                                        orderIdShort={item.orderIdShort}
-                                                        status={item.status}
-                                                        title={item.title}
-                                                        category={item.category}
-                                                        providerName={item.providerName}
-                                                        providerRating={item.providerRating}
-                                                        providerVerified={item.providerVerified}
-                                                        dateTime={item.dateTime}
-                                                        locationLabel={item.locationLabel}
-                                                        priceLabel={item.priceLabel}
-                                                        hasWarranty={item.hasWarranty}
-                                                        warrantyStartDate={item.warrantyStartDate}
-                                                        warrantyEndDate={item.warrantyEndDate}
-                                                        style={{ width: 300, marginRight: 16 }}
-                                                        onPress={() => router.push('/(tabs)/requests')}
-                                                        onChatPress={() => router.push('/chat')}
-                                                    />
-                                                )}
-                                            />
-                                        </View>
-
-                                        {/* Providers List */}
-                                        <View style={styles.listHeader}>
-                                            <Text style={styles.sectionTitle}>Disponíveis Agora</Text>
+                                        <Reanimated.Text style={[
+                                            { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold', letterSpacing: 0.3 },
+                                            rCtaTextStyle
+                                        ]}>Preciso de Reparo!</Reanimated.Text>
+                                    </TouchableOpacity>
+                                ) : (
+                                    <Reanimated.View style={[{ flex: 1 }, rOptionsStyle]}>
+                                        {/* Cabeçalho das Opções: Ajuste margens e cores aqui */}
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                                            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#FFFFFF' }}>Como podemos ajudar?</Text>
                                             <TouchableOpacity
-                                                activeOpacity={0.7}
-                                                onPress={() => router.push('/(tabs)/search')}
+                                                onPress={() => {
+                                                    setShowInlineOptions(false);
+                                                    bottomSheetRef.current?.snapToIndex(0);
+                                                }}
+                                                style={{ backgroundColor: 'rgba(255,255,255,0.2)', padding: 6, borderRadius: 20 }}
                                             >
-                                                <Text style={styles.seeAll}>Ver todos</Text>
+                                                <X size={18} color="#FFFFFF" />
                                             </TouchableOpacity>
                                         </View>
 
-                                        {/* Error Banner */}
-                                        <NetworkErrorBanner
-                                            visible={!!partnersError}
-                                            message={partnersError || undefined}
-                                            onRetry={refetch}
-                                        />
-
-                                        {filteredProviders.map((provider: any) => (
-                                            <ProviderCard
-                                                key={provider.id}
-                                                provider={provider}
-                                                onPress={() => router.push(`/provider/${provider.id}`)}
-                                            />
-                                        ))}
-
-                                        {loading && (
-                                            <>
-                                                <SkeletonProviderCard />
-                                                <SkeletonProviderCard />
-                                                <SkeletonProviderCard />
-                                            </>
-                                        )}
-
-                                    </Reanimated.ScrollView>
-                                </GestureDetector>
+                                        {[
+                                            { id: 'instant', title: 'Hoje (Urgente)', sub: 'Preciso de ajuda agora', icon: Zap, color: '#EF4444', bg: '#FFFFFF' },
+                                            { id: 'evaluation', title: 'Avaliar', sub: 'Quero um orçamento', icon: ClipboardList, color: '#3B82F6', bg: '#FFFFFF' },
+                                            { id: 'workshop', title: 'Oficina', sub: 'Levar para oficina', icon: Wrench, color: '#8B5CF6', bg: '#FFFFFF' }
+                                        ].map((opt) => {
+                                            const Icon = opt.icon;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={opt.id}
+                                                    style={{
+                                                        flexDirection: 'row',
+                                                        alignItems: 'center',
+                                                        // Ajuste a opacidade do fundo (0.15) e borda (0.1) das opções
+                                                        backgroundColor: 'rgba(255,255,255,0.15)',
+                                                        borderRadius: 16,
+                                                        padding: 14,
+                                                        marginBottom: 10, // Margem entre as opções
+                                                        borderWidth: 1,
+                                                        borderColor: 'rgba(255,255,255,0.1)'
+                                                    }}
+                                                    onPress={() => handleOpenRequest(opt.id)}
+                                                    activeOpacity={0.7}
+                                                >
+                                                    {/* Ícone fixo em fundo branco para contraste */}
+                                                    <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
+                                                        <Icon size={22} color={opt.color} />
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#FFFFFF' }}>{opt.title}</Text>
+                                                        <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>{opt.sub}</Text>
+                                                    </View>
+                                                    <ChevronRight size={18} color="rgba(255,255,255,0.5)" />
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </Reanimated.View>
+                                )}
                             </Reanimated.View>
-                        </Reanimated.View>
-                    </GestureDetector>
-
-                    {/* Sticky Header (fades in only when the sheet is touching the top) */}
-                    {/* Note: In this fixed layout, sticky header logic might need adjustment or removal since sheet doesn't scroll to top.
-                    For now, I'll keep it visible if needed, or hide it.
-                    Given the new layout, the static Header with Address is always visible at the top.
-                    The 'sticky' version was for when the list covers the map.
-                    I'll comment it out to avoid confusion and clutter.
-                */}
-                    {/*
-                <Animated.View
-                    style={[
-                        styles.stickyHeader,
-                        {
-                            paddingTop: insets.top + 6,
-                            opacity: stickyHeaderOpacity,
-                            transform: [{ translateY: stickyHeaderTranslateY }],
-                        },
-                    ]}
-                    pointerEvents="none"
-                >
-                    <View style={styles.stickyHeaderBar}>
-                        <View style={styles.stickyHeaderLeft}>
-                            <Text style={styles.stickyNameText}>Bem-vindo, {clientName}</Text>
-                            <View style={styles.stickyAddressRow}>
-                                <MapPin size={14} color={Colors.light.primary} />
-                                <Text style={styles.stickyAddressText} numberOfLines={1}>
-                                    {currentAddress}
-                                </Text>
-                            </View>
                         </View>
 
-                    </View>
-                </Animated.View>
-                */}
+                        {/* Scrollable Content Area */}
+                        <BottomSheetScrollView
+                            style={{ flex: 1 }}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={{ paddingBottom: 40 + insets.bottom, paddingHorizontal: 20 }}
+                        >
+                            {/* Last Services Section */}
+                            <View style={{ marginBottom: 24 }}>
+                                <View style={[styles.listHeader, { marginBottom: 12 }]}>
+                                    <Text style={styles.sectionTitle}>Últimos Serviços</Text>
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => router.push('/(tabs)/requests')}
+                                    >
+                                        <Text style={styles.seeAll}>Ver histórico</Text>
+                                    </TouchableOpacity>
+                                </View>
+                                <FlatList
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    data={[
+                                        {
+                                            id: 'h1',
+                                            orderIdShort: '2841',
+                                            title: 'Ar-condicionado não gela',
+                                            category: 'Refrigeração • Residencial',
+                                            providerName: 'Clima Bom',
+                                            providerRating: 4.9,
+                                            providerVerified: true,
+                                            dateTime: 'Ontem • 14:30',
+                                            locationLabel: 'Porto Velho (Centro)',
+                                            priceLabel: 'R$ 250',
+                                            status: 'FINISHED' as const,
+                                            hasWarranty: true,
+                                            warrantyStartDate: '2025-12-05T10:00:00Z',
+                                            warrantyEndDate: '2026-03-05T10:00:00Z', // Clearly ACTIVE
+                                            icon: require('../../../assets/images/snowflake.png')
+                                        },
+                                        {
+                                            id: 'h2',
+                                            orderIdShort: '2750',
+                                            title: 'Troca de Pneu',
+                                            category: 'Mecânica • Oficina',
+                                            providerName: 'Borracharia JP',
+                                            providerRating: 4.7,
+                                            providerVerified: false,
+                                            dateTime: '21 Out • 09:15',
+                                            locationLabel: 'Porto Velho (Liberdade)',
+                                            priceLabel: 'R$ 80',
+                                            status: 'FINISHED' as const,
+                                            hasWarranty: false,
+                                            icon: require('../../../assets/images/shopping_cart.png')
+                                        },
+                                        {
+                                            id: 'h3',
+                                            orderIdShort: '2612',
+                                            title: 'Pintura de Fachada',
+                                            category: 'Construção • Pintura',
+                                            providerName: 'Mestre da Cor',
+                                            providerRating: 4.5,
+                                            providerVerified: true,
+                                            dateTime: '15 Out • 08:00',
+                                            locationLabel: 'Porto Velho (São Cristóvão)',
+                                            priceLabel: 'R$ 1.200',
+                                            status: 'FINISHED' as const,
+                                            hasWarranty: true,
+                                            warrantyStartDate: '2025-10-01T08:00:00Z',
+                                            warrantyEndDate: '2025-12-15T08:00:00Z', // Clearly EXPIRED
+                                            icon: require('../../../assets/images/wrench_tool.png')
+                                        },
+                                    ]}
+                                    keyExtractor={item => item.id}
+                                    contentContainerStyle={{ paddingRight: 20 }}
+                                    renderItem={({ item }) => (
+                                        <ServiceCard
+                                            orderIdShort={item.orderIdShort}
+                                            status={item.status}
+                                            title={item.title}
+                                            category={item.category}
+                                            providerName={item.providerName}
+                                            providerRating={item.providerRating}
+                                            providerVerified={item.providerVerified}
+                                            dateTime={item.dateTime}
+                                            locationLabel={item.locationLabel}
+                                            priceLabel={item.priceLabel}
+                                            hasWarranty={item.hasWarranty}
+                                            warrantyStartDate={item.warrantyStartDate}
+                                            warrantyEndDate={item.warrantyEndDate}
+                                            style={{ width: 300, marginRight: 16 }}
+                                            onPress={() => router.push('/(tabs)/requests')}
+                                            onChatPress={() => router.push('/chat')}
+                                        />
+                                    )}
+                                />
+                            </View>
+
+                            {/* Providers List */}
+                            <View style={styles.listHeader}>
+                                <Text style={styles.sectionTitle}>Disponíveis Agora</Text>
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => router.push('/(tabs)/search')}
+                                >
+                                    <Text style={styles.seeAll}>Ver todos</Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Error Banner */}
+                            <NetworkErrorBanner
+                                visible={!!partnersError}
+                                message={partnersError || undefined}
+                                onRetry={refetch}
+                            />
+
+                            {filteredProviders.map((provider: any) => (
+                                <ProviderCard
+                                    key={provider.id}
+                                    provider={provider}
+                                    onPress={() => router.push(`/provider/${provider.id}`)}
+                                />
+                            ))}
+
+                            {loading && (
+                                <>
+                                    <SkeletonProviderCard />
+                                    <SkeletonProviderCard />
+                                    <SkeletonProviderCard />
+                                </>
+                            )}
+
+                        </BottomSheetScrollView>
+                    </BottomSheet>
+
+
                 </View >
             </SafeAreaView >
         </GestureHandlerRootView >

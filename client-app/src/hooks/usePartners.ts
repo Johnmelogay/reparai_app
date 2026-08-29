@@ -13,6 +13,7 @@
  *   - Logs all failures through the centralized logger
  *   - Never silently swallows errors or returns fake data
  */
+import { useAuth } from '@/context/AuthContext';
 import { useLocation } from '@/context/LocationContext';
 import { supabase } from '@/services/supabase';
 import { Provider } from '@/types';
@@ -24,64 +25,81 @@ import { useEffect, useMemo } from 'react';
 
 const PARTNERS_CACHE_KEY = 'cached_partners_v4';
 
+const inFlightRequests = new Map<string, Promise<Provider[]>>();
+
 // Helper function extracted so it can be used by React Query
 const fetchPartnersFromRPC = async (
     centerLat: number,
     centerLng: number,
     radiusKm: number
 ): Promise<Provider[]> => {
-    logger.info('Fetching fresh partners via RPC...', { centerLat, centerLng, radiusKm });
-    const { data, error: rpcError } = await supabase.rpc('get_map_partners_v2', {
-        input_lat: centerLat,
-        input_long: centerLng,
-        radius_km: radiusKm,
-        max_limit: 250
-    });
-
-    if (rpcError) {
-        logger.error('RPC get_map_partners_v2 failed', {
-            code: rpcError.code,
-            message: rpcError.message,
-            details: rpcError.details,
-        });
-        throw new Error('Não foi possível carregar prestadores.');
+    const requestKey = `${centerLat}_${centerLng}_${radiusKm}`;
+    if (inFlightRequests.has(requestKey)) {
+        return inFlightRequests.get(requestKey)!;
     }
 
-    if (!data) return [];
+    const fetchPromise = (async () => {
+        try {
+            logger.info('Fetching fresh partners via RPC...', { centerLat, centerLng, radiusKm });
+            const { data, error: rpcError } = await supabase.rpc('get_map_partners_v2', {
+                input_lat: centerLat,
+                input_long: centerLng,
+                radius_km: radiusKm,
+                max_limit: 250
+            });
 
-    const mappedProviders: Provider[] = data.map((p: any) => {
-        const isOficina = p.type === 'FIXED';
-        return {
-            id: p.id,
-            name: p.full_name || 'Prestador',
-            image: p.avatar_url || 'https://via.placeholder.com/150',
-            rating: p.rating || 5.0,
-            reviews: 0,
-            category: p.service_category || 'Geral',
-            categories: [p.service_category],
-            hourlyRate: p.hourly_rate || 100,
-            distance: p.dist_km ? `${p.dist_km.toFixed(1)}km` : '...',
-            coordinates: {
-                latitude: Number(p.lat),
-                longitude: Number(p.long),
-            },
-            status: p.is_online ? 'online' : 'offline',
-            badges: [],
-            type: p.type,
-            address: isOficina ? 'Oficina' : 'Prestador autônomo',
-            visitPrice: '50,00',
-            operationalScore: 100
-        };
-    }).filter((p: Provider) =>
-        Number.isFinite(p.coordinates.latitude) && Number.isFinite(p.coordinates.longitude)
-    );
+            if (rpcError) {
+                logger.error('RPC get_map_partners_v2 failed', {
+                    code: rpcError.code,
+                    message: rpcError.message,
+                    details: rpcError.details,
+                });
+                throw new Error('Não foi possível carregar prestadores.');
+            }
 
-    // Save to local storage for instant offline fallback
-    await saveItem(PARTNERS_CACHE_KEY, mappedProviders);
-    return mappedProviders;
+            if (!data) return [];
+
+            const mappedProviders: Provider[] = data.map((p: any) => {
+                const isOficina = p.type === 'FIXED';
+                return {
+                    id: p.id,
+                    name: p.full_name || 'Prestador',
+                    image: p.avatar_url || 'https://via.placeholder.com/150',
+                    rating: p.rating || 5.0,
+                    reviews: 0,
+                    category: p.service_category || 'Geral',
+                    categories: [p.service_category],
+                    hourlyRate: p.hourly_rate || 100,
+                    distance: p.dist_km ? `${p.dist_km.toFixed(1)}km` : '...',
+                    coordinates: {
+                        latitude: Number(p.lat),
+                        longitude: Number(p.long),
+                    },
+                    status: p.is_online ? 'online' : 'offline',
+                    badges: [],
+                    type: p.type,
+                    address: isOficina ? 'Oficina' : 'Prestador autônomo',
+                    visitPrice: '50,00',
+                    operationalScore: 100
+                };
+            }).filter((p: Provider) =>
+                Number.isFinite(p.coordinates.latitude) && Number.isFinite(p.coordinates.longitude)
+            );
+
+            // Save to local storage for instant offline fallback
+            await saveItem(PARTNERS_CACHE_KEY, mappedProviders);
+            return mappedProviders;
+        } finally {
+            inFlightRequests.delete(requestKey);
+        }
+    })();
+
+    inFlightRequests.set(requestKey, fetchPromise);
+    return fetchPromise;
 };
 
 export const usePartners = (radiusMeters: number = 50000) => {
+    const { user } = useAuth();
     const { location, selectedLocation } = useLocation();
     const queryClient = useQueryClient();
 
@@ -104,6 +122,7 @@ export const usePartners = (radiusMeters: number = 50000) => {
         refetch
     } = useQuery({
         queryKey,
+        enabled: !!user,
         queryFn: async () => {
             try {
                 const cached = await getItem<Provider[]>(PARTNERS_CACHE_KEY);
@@ -112,26 +131,17 @@ export const usePartners = (radiusMeters: number = 50000) => {
                 }
             } catch { }
 
-            return fetchPartnersFromRPC(centerLat, centerLng, radiusKm);
+            return fetchPartnersFromRPC(roundedLat, roundedLng, radiusKm);
         },
         staleTime: 5 * 60 * 1000, // Data stays fresh for 5 mins
         gcTime: 30 * 60 * 1000,
-        refetchInterval: 20 * 1000,
+        retry: 1, // Only retry once on failure with backoff
+        retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
+        refetchInterval: (query) => (query.state.error ? false : 30 * 1000), // Pause polling on error
     });
 
-    // Realtime: partner online/offline/location changes must trigger fresh RPC.
+    // Realtime: partner online/offline/location changes trigger debounced invalidation
     useEffect(() => {
-        const loadCache = async () => {
-            const currentData = queryClient.getQueryData<Provider[]>(queryKey);
-            if (!currentData) {
-                const cached = await getItem<Provider[]>(PARTNERS_CACHE_KEY);
-                if (cached?.length) {
-                    queryClient.setQueryData(queryKey, cached);
-                }
-            }
-        };
-        loadCache();
-
         let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
         const scheduleInvalidate = () => {
             if (invalidateTimer) return;
@@ -141,7 +151,7 @@ export const usePartners = (radiusMeters: number = 50000) => {
                     predicate: ({ queryKey: key }) =>
                         Array.isArray(key) && key[0] === 'partners' && key[1] === 'map',
                 });
-            }, 300);
+            }, 1000);
         };
 
         const channel = supabase.channel('partners_status_updates')
@@ -156,7 +166,7 @@ export const usePartners = (radiusMeters: number = 50000) => {
             if (invalidateTimer) clearTimeout(invalidateTimer);
             supabase.removeChannel(channel);
         };
-    }, [queryClient, queryKey]);
+    }, [queryClient]);
 
     // Recalcula as distâncias baseado na localização atual sem precisar refetch na API
     const providersWithDistance = useMemo(() => {

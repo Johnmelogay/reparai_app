@@ -11,6 +11,7 @@ import {
     LogOut,
     MapPin,
     Settings,
+    Sparkles,
     Star,
     User,
     Wrench,
@@ -25,6 +26,29 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { supabase } from '@/services/supabase';
+import { useQuery } from '@tanstack/react-query';
+import { CheckCircle2 } from 'lucide-react-native';
+
+function useProviderStats(userId: string | undefined) {
+    return useQuery({
+        queryKey: ['providerStats', userId],
+        queryFn: async () => {
+            if (!userId) return { pedidos: '-' };
+            
+            const { count: pedidosCount } = await supabase
+                .from('requests')
+                .select('*', { count: 'exact', head: true })
+                .eq('provider_id', userId)
+                .eq('status', 'done');
+
+            return {
+                pedidos: pedidosCount ?? 0,
+            };
+        },
+        enabled: !!userId,
+    });
+}
 
 function MenuRow({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress?: () => void }) {
     return (
@@ -40,6 +64,7 @@ export default function ProfileScreen() {
     const router = useRouter();
     const { signOut, user } = useAuth();
     const { profile } = useProviderProfile();
+    const { data: stats } = useProviderStats(user?.id);
 
     const handleSignOut = () => {
         Alert.alert(
@@ -91,6 +116,14 @@ export default function ProfileScreen() {
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.statBox}>
+                            <CheckCircle2 size={16} color={Colors.light.success} />
+                            <Text style={styles.statBoxValue}>
+                                {stats?.pedidos ?? '-'}
+                            </Text>
+                            <Text style={styles.statBoxLabel}>Pedidos</Text>
+                        </View>
+                        <View style={styles.statDivider} />
+                        <View style={styles.statBox}>
                             <Wrench size={16} color={Colors.light.accent} />
                             <Text style={styles.statBoxValue}>
                                 {categoryLabel(profile?.service_category)}
@@ -114,6 +147,11 @@ export default function ProfileScreen() {
                         icon={<User size={20} color={Colors.light.text} />}
                         label="Editar Perfil"
                         onPress={() => router.push('/profile/edit')}
+                    />
+                    <MenuRow
+                        icon={<Sparkles size={20} color={Colors.light.primary} />}
+                        label="Destaques"
+                        onPress={() => router.push('/profile/highlights')}
                     />
                     <MenuRow
                         icon={<Settings size={20} color={Colors.light.text} />}

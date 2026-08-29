@@ -31,8 +31,9 @@ export interface MyRequest {
     provider_rating: number | null;
 }
 
-const ACTIVE_STATUSES = ['finding', 'offered', 'accepted', 'paid', 'en_route'];
-const HISTORY_STATUSES = ['completed', 'canceled'];
+const ACTIVE_STATUSES = ['finding', 'offered', 'answered', 'accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const DONE_STATUSES = ['done'];
+const CANCELED_STATUSES = ['canceled', 'declined', 'expired', 'disputed'];
 
 async function fetchMyRequests(userId: string): Promise<MyRequest[]> {
     // Fetch requests with a left join on partners for provider info
@@ -133,12 +134,14 @@ export function useMyRequests() {
     }, [user, queryClient]);
 
     const activeRequests = allRequests.filter(r => ACTIVE_STATUSES.includes(r.status));
-    const historyRequests = allRequests.filter(r => HISTORY_STATUSES.includes(r.status));
+    const doneRequests = allRequests.filter(r => DONE_STATUSES.includes(r.status));
+    const canceledRequests = allRequests.filter(r => CANCELED_STATUSES.includes(r.status));
 
     return {
         allRequests,
         activeRequests,
-        historyRequests,
+        doneRequests,
+        canceledRequests,
         loading: isLoading,
         error: isError ? (error instanceof Error ? error.message : 'Erro ao carregar pedidos') : null,
         refetch,

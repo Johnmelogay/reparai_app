@@ -1,11 +1,13 @@
 import { Button } from '@/components/ui/Button';
 import { Colors } from '@/constants/Colors';
 import { useChatThread } from '@/hooks/useChatThread';
+import { supabase } from '@/services/supabase';
 import { toErrorMessage } from '@/utils/error';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { AlertCircle, ArrowLeft, FileText, MessageCircle, Send, Store } from 'lucide-react-native';
+import { AlertCircle, ArrowLeft, CheckCircle, FileText, HeadphonesIcon, MessageCircle, Send, Star, Store } from 'lucide-react-native';
 import React, { useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -20,11 +22,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 function flowSubtitle(status?: string): string {
   if (status === 'finding') return 'O chat libera após a confirmação do pedido.';
   if (status === 'offered') return 'Escolha uma oferta para continuar o fluxo.';
-  if (status === 'accepted') return 'Atendimento confirmado. Use o chat para alinhar detalhes e agendamento.';
-  if (status === 'paid') return 'Converse com o prestador sem sair do app.';
-  if (status === 'en_route') return 'Use o chat para combinar referência de chegada.';
-  if (status === 'completed') return 'Canal aberto para suporte pós-serviço no app.';
+  if (status === 'accepted' || status === 'confirmed') return 'Atendimento confirmado. Use o chat para alinhar detalhes.';
+  if (status === 'en_route') return 'Prestador a caminho. Use o chat para combinar referência de chegada.';
+  if (status === 'arrived') return 'Prestador no local. Converse e acompanhe o orçamento.';
+  if (status === 'quote_provided') return 'Orçamento disponível para aprovação.';
+  if (status === 'quote_accepted') return 'Serviço em execução.';
+  if (status === 'done' || status === 'completed') return 'Pedido finalizado. Histórico da conversa disponível.';
   return 'As atualizações aparecem nesta conversa.';
+}
+
+function inputPlaceholder(status?: string, canSend?: boolean): string {
+  if (status === 'done' || status === 'completed') return 'Pedido encerrado. Use o suporte para dúvidas.';
+  if (canSend) return 'Digite sua mensagem...';
+  return 'Chat liberado após confirmação do pedido.';
 }
 
 function formatTime(dateString: string): string {
@@ -32,6 +42,27 @@ function formatTime(dateString: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+type MergedItem =
+  | { type: 'message'; id: string; data: ReturnType<typeof useChatThread>['messages'][number] }
+  | { type: 'confirm_request'; id: string }
+  | { type: 'review_request'; id: string };
+
+function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <View style={styles.starRow}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <TouchableOpacity key={n} onPress={() => onChange(n)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Star
+            size={32}
+            color={n <= value ? '#F59E0B' : '#D1D5DB'}
+            fill={n <= value ? '#F59E0B' : 'transparent'}
+          />
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 }
 
 export default function ChatRoomScreen() {
@@ -43,9 +74,65 @@ export default function ChatRoomScreen() {
 
   const [inputText, setInputText] = useState('');
   const [composerError, setComposerError] = useState<string | null>(null);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewDone, setReviewDone] = useState(false);
+  const [clientConfirmed, setClientConfirmed] = useState(false);
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const listRef = useRef<FlatList>(null);
 
+  const handleConfirmDone = async () => {
+    if (!requestId || confirmSubmitting) return;
+    setConfirmSubmitting(true);
+    try {
+      const { error: err } = await supabase.rpc('client_confirm_done', { p_request_id: requestId });
+      if (err) throw err;
+      setClientConfirmed(true);
+      refetch();
+    } catch (e: any) {
+      setComposerError(e?.message || 'Erro ao confirmar conclusão.');
+    } finally {
+      setConfirmSubmitting(false);
+    }
+  };
+
+  const handleSubmitReview = async () => {
+    if (!requestId || reviewRating === 0 || reviewSubmitting) return;
+    setReviewSubmitting(true);
+    try {
+      const { error: err } = await supabase.rpc('submit_review', {
+        p_request_id: requestId,
+        p_rating: reviewRating,
+        p_comment: reviewComment.trim() || null,
+      });
+      if (err) throw err;
+
+      setReviewDone(true);
+      refetch();
+    } catch (e: any) {
+      setComposerError(e?.message || 'Erro ao enviar avaliação.');
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
   const headerName = thread?.provider?.name || 'Prestador';
+
+  // Build merged list: messages → confirm bubble → review bubble
+  const mergedData = useMemo<MergedItem[]>(() => {
+    const items: MergedItem[] = messages.map((m) => ({ type: 'message', id: m.id, data: m }));
+    if (!thread?.doneProviderAt) return items;
+
+    const clientHasConfirmed = clientConfirmed || !!thread.doneClientAt;
+
+    if (!clientHasConfirmed) {
+      items.push({ type: 'confirm_request', id: '__confirm__' });
+    } else if (!thread.hasClientReview && !reviewDone) {
+      items.push({ type: 'review_request', id: '__review__' });
+    }
+    return items;
+  }, [messages, thread?.doneProviderAt, thread?.doneClientAt, thread?.hasClientReview, clientConfirmed, reviewDone]);
 
   const timelineItems = useMemo(
     () => ['Buscando', 'Ofertas', 'Aceite', 'Pago', 'A caminho', 'Finalizado'],
@@ -59,6 +146,7 @@ export default function ChatRoomScreen() {
       accepted: 2,
       paid: 3,
       en_route: 4,
+      done: 5,
       completed: 5,
     };
     return map[thread?.status || ''] ?? -1;
@@ -136,6 +224,12 @@ export default function ChatRoomScreen() {
               <Store size={18} color={Colors.light.textSecondary} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            onPress={() => router.push('/profile/help' as any)}
+            style={[styles.headerIconBtn, styles.supportBtn]}
+          >
+            <HeadphonesIcon size={18} color="#fff" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -170,16 +264,73 @@ export default function ChatRoomScreen() {
 
       <FlatList
         ref={listRef}
-        data={messages}
+        data={mergedData}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesListContent}
         renderItem={({ item }) => {
-          const outgoing = item.direction === 'outgoing';
+          if (item.type === 'confirm_request') {
+            return (
+              <View style={styles.reviewBubble}>
+                <View style={styles.reviewBubbleHeader}>
+                  <CheckCircle size={18} color="#2563EB" />
+                  <Text style={[styles.reviewBubbleTitle, { color: '#2563EB' }]}>Serviço finalizado pelo prestador</Text>
+                </View>
+                <Text style={styles.reviewBubbleSub}>
+                  Confirme que o serviço foi concluído para liberar a avaliação.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.reviewSubmitBtn, confirmSubmitting && styles.reviewSubmitBtnDisabled]}
+                  onPress={handleConfirmDone}
+                  disabled={confirmSubmitting}
+                >
+                  {confirmSubmitting
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={styles.reviewSubmitText}>Confirmar Conclusão</Text>}
+                </TouchableOpacity>
+              </View>
+            );
+          }
+
+          if (item.type === 'review_request') {
+            return (
+              <View style={styles.reviewBubble}>
+                <View style={styles.reviewBubbleHeader}>
+                  <CheckCircle size={18} color="#16A34A" />
+                  <Text style={styles.reviewBubbleTitle}>Serviço concluído!</Text>
+                </View>
+                <Text style={styles.reviewBubbleSub}>Como foi a experiência com {headerName}?</Text>
+
+                <StarPicker value={reviewRating} onChange={setReviewRating} />
+
+                <TextInput
+                  style={styles.reviewCommentInput}
+                  value={reviewComment}
+                  onChangeText={setReviewComment}
+                  placeholder="Deixe um comentário (opcional)..."
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                  maxLength={300}
+                />
+
+                <TouchableOpacity
+                  style={[styles.reviewSubmitBtn, (reviewRating === 0 || reviewSubmitting) && styles.reviewSubmitBtnDisabled]}
+                  onPress={handleSubmitReview}
+                  disabled={reviewRating === 0 || reviewSubmitting}
+                >
+                  {reviewSubmitting
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={styles.reviewSubmitText}>Enviar Avaliação</Text>}
+                </TouchableOpacity>
+              </View>
+            );
+          }
+
+          const outgoing = item.data.direction === 'outgoing';
           return (
             <View style={[styles.messageRow, outgoing ? styles.messageRowOutgoing : styles.messageRowIncoming]}>
               <View style={[styles.messageBubble, outgoing ? styles.bubbleOutgoing : styles.bubbleIncoming]}>
-                <Text style={[styles.messageText, outgoing ? styles.textOutgoing : styles.textIncoming]}>{item.text}</Text>
-                <Text style={[styles.messageTime, outgoing ? styles.timeOutgoing : styles.timeIncoming]}>{formatTime(item.createdAt)}</Text>
+                <Text style={[styles.messageText, outgoing ? styles.textOutgoing : styles.textIncoming]}>{item.data.text}</Text>
+                <Text style={[styles.messageTime, outgoing ? styles.timeOutgoing : styles.timeIncoming]}>{formatTime(item.data.createdAt)}</Text>
               </View>
             </View>
           );
@@ -216,7 +367,7 @@ export default function ChatRoomScreen() {
             style={[styles.input, !thread.canSend && styles.inputDisabled]}
             value={inputText}
             onChangeText={setInputText}
-            placeholder={thread.status === 'completed' ? 'Atendimento finalizado. Chat encerrado.' : (thread.canSend ? 'Digite sua mensagem...' : 'Chat será liberado após confirmação do pedido')}
+            placeholder={inputPlaceholder(thread.status, thread.canSend)}
             placeholderTextColor="#9CA3AF"
             editable={thread.canSend && !sending}
             multiline
@@ -491,5 +642,72 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 13,
+  },
+  // Review bubble
+  reviewBubble: {
+    marginHorizontal: 12,
+    marginVertical: 8,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  reviewBubbleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  reviewBubbleTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#16A34A',
+  },
+  reviewBubbleSub: {
+    fontSize: 13,
+    color: '#4B5563',
+    marginBottom: 14,
+  },
+  starRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+  },
+  reviewCommentInput: {
+    minHeight: 70,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: '#111827',
+    textAlignVertical: 'top',
+    marginBottom: 14,
+  },
+  reviewSubmitBtn: {
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.light.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewSubmitBtnDisabled: {
+    opacity: 0.45,
+  },
+  reviewSubmitText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  supportBtn: {
+    backgroundColor: Colors.light.primary,
   },
 });

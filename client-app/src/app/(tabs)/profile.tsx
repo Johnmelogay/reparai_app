@@ -27,12 +27,50 @@ const GUEST_BENEFITS = [
 ];
 
 import { useProfile } from '@/hooks/useProfile';
+import { supabase } from '@/services/supabase';
+import { useQuery } from '@tanstack/react-query';
+
+function useProfileStats(userId: string | undefined) {
+    return useQuery({
+        queryKey: ['profileStats', userId],
+        queryFn: async () => {
+            if (!userId) return { pedidos: '-', avaliacao: '-' };
+            
+            // Pedidos
+            const { count: pedidosCount } = await supabase
+                .from('requests')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
+                .eq('status', 'done');
+
+            // Avaliação
+            const { data: reviews } = await supabase
+                .from('reviews')
+                .select('rating')
+                .eq('reviewee_id', userId);
+
+            let avaliacaoVal = '-';
+            if (reviews && reviews.length > 0) {
+                const sum = reviews.reduce((acc, curr) => acc + curr.rating, 0);
+                avaliacaoVal = (sum / reviews.length).toFixed(1);
+            }
+
+            return {
+                pedidos: pedidosCount ?? 0,
+                avaliacao: avaliacaoVal
+            };
+        },
+        enabled: !!userId,
+    });
+}
 
 export default function ProfileScreen() {
     const router = useRouter();
-    const { isGuest, signOut } = useAuth();
+    const { isGuest, signOut, user } = useAuth();
     const { profile, loading } = useProfile();
     const [showAuth, setShowAuth] = useState(false);
+    
+    const { data: stats } = useProfileStats(user?.id);
 
     // GUEST MODE
     if (isGuest) {
@@ -112,12 +150,12 @@ export default function ProfileScreen() {
 
                     <View style={styles.statsContainer}>
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>-</Text>
+                            <Text style={styles.statValue}>{stats?.pedidos ?? '-'}</Text>
                             <Text style={styles.statLabel}>Pedidos</Text>
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>-</Text>
+                            <Text style={styles.statValue}>{stats?.avaliacao ?? '-'}</Text>
                             <Text style={styles.statLabel}>Avaliação</Text>
                         </View>
                     </View>

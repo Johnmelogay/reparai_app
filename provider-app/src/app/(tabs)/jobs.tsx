@@ -358,12 +358,8 @@ export default function JobsScreen() {
     useEffect(() => {
         if (!isOnline) return;
 
-        // Sync immediately and keep refreshing while online.
+        // Sync immediately when going online.
         syncProviderLocation({ requestPermission: false, silent: true });
-
-        const interval = setInterval(() => {
-            syncProviderLocation({ requestPermission: false, silent: true });
-        }, 30_000);
 
         const subscription = AppState.addEventListener('change', (nextState) => {
             const wasBackground = appStateRef.current.match(/inactive|background/);
@@ -374,7 +370,6 @@ export default function JobsScreen() {
         });
 
         return () => {
-            clearInterval(interval);
             subscription.remove();
         };
     }, [isOnline, syncProviderLocation]);
