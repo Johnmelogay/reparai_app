@@ -25,8 +25,17 @@ export function useProviderChatThread(requestId?: string) {
     const isAppVisible = useAppVisibility();
     const queryClient = useQueryClient();
     const isMarkingReadRef = useRef(false);
+    const pendingMarkReadRef = useRef(false);
+    const isMountedRef = useRef(true);
     const channelIdRef = useRef(Math.random().toString(36).substring(2, 9));
     const threadQueryKey = useMemo(() => ['provider_chat_thread', providerId, requestId], [providerId, requestId]);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const isThreadVisiblyActive = isFocused && isAppVisible;
     const isThreadVisiblyActiveRef = useRef(isThreadVisiblyActive);
@@ -54,19 +63,41 @@ export function useProviderChatThread(requestId?: string) {
         },
     });
 
-    // Função segura e coalescida para marcar mensagens da thread como lidas
+    // Função serial e coalescida para marcar mensagens da thread como lidas
     const triggerMarkRead = useCallback(async () => {
-        if (!providerId || !requestId || !isThreadVisiblyActiveRef.current || isMarkingReadRef.current) return;
+        if (!providerId || !requestId || !isThreadVisiblyActiveRef.current || !isMountedRef.current) {
+            return;
+        }
+
+        pendingMarkReadRef.current = true;
+
+        if (isMarkingReadRef.current) {
+            // Já existe uma RPC em execução; ela consumirá pendingMarkReadRef ao concluir
+            return;
+        }
 
         isMarkingReadRef.current = true;
+
         try {
-            const updatedCount = await markProviderChatThreadAsRead(requestId);
-            if (updatedCount > 0) {
-                queryClient.invalidateQueries({ queryKey: threadQueryKey });
-                queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
+            while (
+                pendingMarkReadRef.current &&
+                isThreadVisiblyActiveRef.current &&
+                isMountedRef.current
+            ) {
+                pendingMarkReadRef.current = false;
+
+                try {
+                    const updatedCount = await markProviderChatThreadAsRead(requestId);
+                    if (updatedCount > 0 && isMountedRef.current) {
+                        queryClient.invalidateQueries({ queryKey: threadQueryKey });
+                        queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
+                    }
+                } catch {
+                    // Em caso de erro, interrompe o ciclo para evitar loop contínuo
+                    pendingMarkReadRef.current = false;
+                    break;
+                }
             }
-        } catch {
-            // Falha silenciosa não deve quebrar a experiência
         } finally {
             isMarkingReadRef.current = false;
         }
