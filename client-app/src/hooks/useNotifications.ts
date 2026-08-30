@@ -2,11 +2,12 @@ import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/services/supabase';
 import { Notification } from '@/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 export function useNotifications() {
     const { user } = useAuth();
     const queryClient = useQueryClient();
+    const channelIdRef = useRef(Math.random().toString(36).substring(2, 9));
 
     const queryKey = ['notifications', user?.id];
 
@@ -30,7 +31,7 @@ export function useNotifications() {
             return (data || []) as Notification[];
         },
         enabled: !!user,
-        staleTime: 5 * 60 * 1000, // 5 minutes fresh
+        staleTime: 10 * 1000,
     });
 
     const markAsReadMutation = useMutation({
@@ -121,7 +122,7 @@ export function useNotifications() {
         if (!user) return;
 
         const channel = supabase
-            .channel(`user_notifications_hook_${user.id}`)
+            .channel(`user_notifications_${user.id}_${channelIdRef.current}`)
             .on(
                 'postgres_changes',
                 {
@@ -152,13 +153,28 @@ export function useNotifications() {
         };
     }, [user, queryClient]);
 
-    const unreadCount = notifications.filter((n: Notification) => !n.is_read).length;
+    const nonMessageNotifications = useMemo(
+        () => notifications.filter((n: Notification) => n.type !== 'message'),
+        [notifications]
+    );
+
+    const unreadNonMessageCount = useMemo(
+        () => nonMessageNotifications.filter((n: Notification) => !n.is_read).length,
+        [nonMessageNotifications]
+    );
+
+    const unreadCount = useMemo(
+        () => notifications.filter((n: Notification) => !n.is_read).length,
+        [notifications]
+    );
 
     return {
         notifications,
+        nonMessageNotifications,
         loading,
         error: error ? (error instanceof Error ? error.message : String(error)) : null,
         unreadCount,
+        unreadNonMessageCount,
         fetchNotifications,
         markAsRead: (id: string) => markAsReadMutation.mutateAsync(id).catch(console.error),
         markAllAsRead: () => markAllAsReadMutation.mutateAsync().catch(console.error),

@@ -1,6 +1,7 @@
 import { supabase } from '@/services/supabase';
 
-const CHAT_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const CHAT_SEND_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const INBOX_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted', 'done', 'completed'];
 
 function normalizeStatus(status: string | null | undefined): string {
   return (status || '').toLowerCase().trim();
@@ -120,7 +121,7 @@ export async function fetchChatInbox(userId: string): Promise<ChatThreadSummary[
   }
 
   const requestRows = (requests || []).filter((row: any) =>
-    CHAT_ENABLED_STATUSES.includes(normalizeStatus(row.status))
+    INBOX_ENABLED_STATUSES.includes(normalizeStatus(row.status))
   );
   const requestIds = requestRows.map((row: any) => row.id).filter(Boolean);
 
@@ -243,7 +244,7 @@ export async function fetchChatThread(userId: string, requestId: string): Promis
     updatedAt: requestRow.updated_at,
     providerId: requestRow.provider_id,
     provider: requestRow.partners ? mapPartner(requestRow.partners) : null,
-    canSend: CHAT_ENABLED_STATUSES.includes(normalizeStatus(requestRow.status)),
+    canSend: CHAT_SEND_ENABLED_STATUSES.includes(normalizeStatus(requestRow.status)),
     doneProviderAt: requestRow.done_provider_at ?? null,
     doneClientAt: requestRow.done_client_at ?? null,
     hasClientReview: !!reviewRow,

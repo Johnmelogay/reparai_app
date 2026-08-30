@@ -1,6 +1,7 @@
 import { supabase } from '@/services/supabase';
 
-const CHAT_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const CHAT_SEND_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'];
+const INBOX_ENABLED_STATUSES = ['accepted', 'confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted', 'done', 'completed'];
 
 function normalizeStatus(status: string | null | undefined): string {
     return (status || '').toLowerCase().trim();
@@ -105,7 +106,7 @@ export async function fetchProviderChatInbox(providerId: string): Promise<Provid
     if (requestsError) throw requestsError;
 
     const requestRows = (requests || []).filter((row: any) =>
-        CHAT_ENABLED_STATUSES.includes(normalizeStatus(row.status))
+        INBOX_ENABLED_STATUSES.includes(normalizeStatus(row.status))
     );
     const requestIds = requestRows.map((row: any) => row.id).filter(Boolean);
     if (requestIds.length === 0) return [];
@@ -201,7 +202,7 @@ export async function fetchProviderChatThread(providerId: string, requestId: str
         updatedAt: requestRow.updated_at,
         clientId: requestRow.user_id,
         client: mapClient(requestRow.clients),
-        canSend: CHAT_ENABLED_STATUSES.includes(normalizeStatus(requestRow.status)),
+        canSend: CHAT_SEND_ENABLED_STATUSES.includes(normalizeStatus(requestRow.status)),
     };
 
     // Deduplicação determinística por ID persistido

@@ -4,20 +4,21 @@ import { supabase } from '@/services/supabase';
 import { toErrorMessage } from '@/utils/error';
 import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export function useProviderChatInbox() {
     const { user } = useAuth();
     const providerId = user?.id;
     const isFocused = useIsFocused();
     const queryClient = useQueryClient();
+    const channelIdRef = useRef(Math.random().toString(36).substring(2, 9));
     const queryKey = ['provider_chat_inbox', providerId];
 
     const query = useQuery({
         queryKey,
         queryFn: () => fetchProviderChatInbox(providerId!),
         enabled: !!providerId,
-        staleTime: 30 * 1000,
+        staleTime: 10 * 1000,
     });
 
     // Refetch garantido ao focar na tela de conversas do prestador
@@ -32,9 +33,9 @@ export function useProviderChatInbox() {
 
         const invalidate = () => queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
 
-        // Escuta novas mensagens na tabela canônica chat_messages
+        // Escuta novas mensagens na tabela canônica chat_messages com canal isolado
         const chatChannel = supabase
-            .channel(`provider_chat_inbox_messages_${providerId}`)
+            .channel(`provider_inbox_msgs_${providerId}_${channelIdRef.current}`)
             .on(
                 'postgres_changes',
                 {
@@ -47,7 +48,7 @@ export function useProviderChatInbox() {
             .subscribe();
 
         const requestsChannel = supabase
-            .channel(`provider_chat_inbox_requests_${providerId}`)
+            .channel(`provider_inbox_reqs_${providerId}_${channelIdRef.current}`)
             .on(
                 'postgres_changes',
                 {

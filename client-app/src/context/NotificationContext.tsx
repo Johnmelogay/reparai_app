@@ -1,5 +1,6 @@
 import { InAppBannerData, InAppNotificationBanner } from '@/components/InAppNotificationBanner';
 import { supabase } from '@/services/supabase';
+import { useQueryClient } from '@tanstack/react-query';
 import * as Notifications from 'expo-notifications';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
@@ -45,11 +46,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const router = useRouter();
     const pathname = usePathname();
     const params = useGlobalSearchParams<{ id?: string }>();
+    const queryClient = useQueryClient();
     const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
     const [notification, setNotification] = useState<Notifications.Notification | null>(null);
     const [badgeCount, setBadgeCount] = useState(0);
     const [inAppBanner, setInAppBanner] = useState<InAppBannerData | null>(null);
     const seenNotificationIdsRef = useRef<Set<string>>(new Set());
+    const seenMessageIdsRef = useRef<Set<string>>(new Set());
     const notificationListener = useRef<any>(null);
     const responseListener = useRef<any>(null);
 
@@ -90,7 +93,65 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         };
     }, [router]);
 
-    // Listen for Supabase notifications table directly (Realtime in-app foreground banner)
+    // Listen to canonical chat_messages for Realtime in-app banner with real message preview
+    useEffect(() => {
+        if (!user) return;
+
+        const channel = supabase
+            .channel(`client_chat_messages_banner_${user.id}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'chat_messages',
+                },
+                (payload: any) => {
+                    // Always invalidate inbox query on any message change
+                    queryClient.invalidateQueries({ queryKey: ['chat_inbox', user.id] });
+
+                    if (payload.eventType !== 'INSERT') return;
+
+                    const record = payload.new;
+                    if (!record || !record.id) return;
+
+                    // Ignore messages sent by the user themselves
+                    if (record.sender_id === user.id) return;
+
+                    // Deduplicate by message ID
+                    if (seenMessageIdsRef.current.has(record.id)) return;
+                    seenMessageIdsRef.current.add(record.id);
+
+                    const { pathname: currentPath, activeRequestId } = currentRouteRef.current;
+                    const isChatActiveForSameRequest =
+                        record.request_id &&
+                        (currentPath?.includes('/chat') && (activeRequestId === record.request_id || currentPath.includes(record.request_id)));
+
+                    // Suppress banner if user is actively in this chat thread
+                    if (isChatActiveForSameRequest) {
+                        return;
+                    }
+
+                    const bodyText = record.body || '';
+                    const previewText = bodyText.length > 90 ? bodyText.slice(0, 87) + '...' : bodyText;
+
+                    setInAppBanner({
+                        id: record.id,
+                        title: 'Nova mensagem',
+                        message: previewText || 'Você recebeu uma nova mensagem.',
+                        type: 'message',
+                        relatedId: record.request_id,
+                    });
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [user, queryClient]);
+
+    // Listen for Supabase notifications table directly for non-message in-app alerts
     useEffect(() => {
         if (!user) return;
 
@@ -99,31 +160,30 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             .on(
                 'postgres_changes',
                 {
-                    event: 'INSERT',
+                    event: '*',
                     schema: 'public',
                     table: 'notifications',
                     filter: `user_id=eq.${user.id}`,
                 },
                 (payload: any) => {
+                    // Always invalidate notifications query
+                    queryClient.invalidateQueries({ queryKey: ['notifications', user.id] });
+
+                    if (payload.eventType !== 'INSERT') return;
+
                     const record = payload.new;
                     if (!record || !record.id) return;
+
+                    // Skip type='message' notifications since chat_messages listener handles it with real preview
+                    if (record.type === 'message') {
+                        return;
+                    }
 
                     // Deduplicate by notification ID
                     if (seenNotificationIdsRef.current.has(record.id)) return;
                     seenNotificationIdsRef.current.add(record.id);
 
-                    const { pathname: currentPath, activeRequestId } = currentRouteRef.current;
-                    const isChatActiveForSameRequest =
-                        record.type === 'message' &&
-                        record.related_id &&
-                        (currentPath?.includes('/chat') && (activeRequestId === record.related_id || currentPath.includes(record.related_id)));
-
-                    // Do not show banner if user is currently inside this chat thread
-                    if (isChatActiveForSameRequest) {
-                        return;
-                    }
-
-                    const bannerTitle = record.title?.includes(':') ? 'Nova mensagem' : (record.title || 'Notificação');
+                    const bannerTitle = record.title || 'Notificação';
                     const bannerMessage = record.message || 'Você recebeu uma atualização.';
 
                     setInAppBanner({
@@ -140,7 +200,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [user]);
+    }, [user, queryClient]);
 
     const resetBadge = async () => {
         try {

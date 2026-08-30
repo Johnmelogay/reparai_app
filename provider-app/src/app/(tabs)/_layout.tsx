@@ -7,8 +7,8 @@ import { Platform } from 'react-native';
 
 export default function TabLayout() {
     const { threads } = useProviderChatInbox();
-    const unreadMessagesCount = threads.reduce((sum, item) => sum + (item.unreadCount || 0), 0);
-    const chatBadge = unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : String(unreadMessagesCount)) : undefined;
+    const unreadConversationsCount = threads.filter((item) => item.unreadCount > 0).length;
+    const chatBadge = unreadConversationsCount > 0 ? (unreadConversationsCount > 99 ? '99+' : String(unreadConversationsCount)) : undefined;
 
     return (
         <Tabs

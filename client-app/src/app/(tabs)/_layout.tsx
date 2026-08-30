@@ -1,19 +1,20 @@
 import { Colors } from '@/constants/Colors';
-import { useMyRequests } from '@/hooks/useMyRequests';
+import { useChatInbox } from '@/hooks/useChatInbox';
 import { useNotifications } from '@/hooks/useNotifications';
-import { needsClientAction } from '@/utils/orderActions';
 import { Tabs } from 'expo-router';
 import { Bell, House, List, Search, User } from 'lucide-react-native';
 import React from 'react';
 import { Platform } from 'react-native';
 
 export default function TabLayout() {
-  const { unreadCount } = useNotifications();
-  const { allRequests } = useMyRequests();
-  const pendingActionsCount = allRequests.filter((r) => needsClientAction(r.status)).length;
-  const notificationsBadgeCount = unreadCount + pendingActionsCount;
-  const notificationsBadge = notificationsBadgeCount > 0
-    ? notificationsBadgeCount > 99 ? '99+' : String(notificationsBadgeCount)
+  const { unreadNonMessageCount } = useNotifications();
+  const { threads: chatThreads } = useChatInbox();
+
+  const conversasComMensagensNaoLidas = chatThreads.filter((t) => t.unreadCount > 0).length;
+  const totalBadgeCount = conversasComMensagensNaoLidas + unreadNonMessageCount;
+
+  const notificationsBadge = totalBadgeCount > 0
+    ? totalBadgeCount > 99 ? '99+' : String(totalBadgeCount)
     : undefined;
 
   return (
