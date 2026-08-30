@@ -23,7 +23,7 @@ import {
     X
 } from 'lucide-react-native';
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, View, Dimensions, TouchableOpacity, Image, Platform } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, View, Dimensions, TouchableOpacity, Image, Platform, Keyboard, KeyboardAvoidingView, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import SuccessModal from '@/components/SuccessModal';
@@ -966,57 +966,76 @@ export default function TicketDetailScreen() {
                     router.replace('/(tabs)/home');
                 }}
             >
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Avaliar prestador</Text>
-                        <Text style={styles.modalSubtitle}>Como foi o serviço de {provider?.full_name}?</Text>
+                <KeyboardAvoidingView
+                    style={styles.keyboardAvoidingView}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
+                    <Pressable
+                        style={styles.modalOverlay}
+                        onPress={Keyboard.dismiss}
+                        accessible={false}
+                    >
+                        <View
+                            style={styles.modalContent}
+                            onStartShouldSetResponder={() => true}
+                        >
+                            <ScrollView
+                                contentContainerStyle={styles.modalScrollContent}
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator={false}
+                                bounces={false}
+                            >
+                                <Text style={styles.modalTitle}>Avaliar prestador</Text>
+                                <Text style={styles.modalSubtitle}>Como foi o serviço de {provider?.full_name}?</Text>
 
-                        <View style={styles.starsRow}>
-                            {[1, 2, 3, 4, 5].map((v) => (
-                                <TouchableOpacity key={v} onPress={() => setRatingValue(v)} activeOpacity={0.7}>
-                                    <Star
-                                        size={36}
-                                        color="#F59E0B"
-                                        fill={v <= ratingValue ? '#F59E0B' : 'transparent'}
-                                    />
+                                <View style={styles.starsRow}>
+                                    {[1, 2, 3, 4, 5].map((v) => (
+                                        <TouchableOpacity key={v} onPress={() => setRatingValue(v)} activeOpacity={0.7}>
+                                            <Star
+                                                size={36}
+                                                color="#F59E0B"
+                                                fill={v <= ratingValue ? '#F59E0B' : 'transparent'}
+                                            />
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+
+                                <TextInput
+                                    style={styles.commentInput}
+                                    placeholder="Comentário (opcional)"
+                                    placeholderTextColor="#9CA3AF"
+                                    value={ratingComment}
+                                    onChangeText={setRatingComment}
+                                    multiline
+                                    maxLength={300}
+                                />
+
+                                <TouchableOpacity
+                                    style={[styles.modalSubmitBtn, ratingValue === 0 && styles.modalSubmitBtnDisabled]}
+                                    onPress={handleSubmitRating}
+                                    disabled={ratingValue === 0 || ratingLoading}
+                                    activeOpacity={0.8}
+                                >
+                                    {ratingLoading ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <Text style={styles.modalSubmitBtnText}>Enviar avaliação</Text>
+                                    )}
                                 </TouchableOpacity>
-                            ))}
+
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setRatingVisible(false);
+                                        router.replace('/(tabs)/home');
+                                    }}
+                                    style={styles.modalSkipBtn}
+                                >
+                                    <Text style={styles.modalSkipText}>Pular</Text>
+                                </TouchableOpacity>
+                            </ScrollView>
                         </View>
-
-                        <TextInput
-                            style={styles.commentInput}
-                            placeholder="Comentário (opcional)"
-                            placeholderTextColor="#9CA3AF"
-                            value={ratingComment}
-                            onChangeText={setRatingComment}
-                            multiline
-                            maxLength={300}
-                        />
-
-                        <TouchableOpacity
-                            style={[styles.modalSubmitBtn, ratingValue === 0 && styles.modalSubmitBtnDisabled]}
-                            onPress={handleSubmitRating}
-                            disabled={ratingValue === 0 || ratingLoading}
-                            activeOpacity={0.8}
-                        >
-                            {ratingLoading ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                                <Text style={styles.modalSubmitBtnText}>Enviar avaliação</Text>
-                            )}
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            onPress={() => {
-                                setRatingVisible(false);
-                                router.replace('/(tabs)/home');
-                            }}
-                            style={styles.modalSkipBtn}
-                        >
-                            <Text style={styles.modalSkipText}>Pular</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                    </Pressable>
+                </KeyboardAvoidingView>
             </Modal>
 
             {/* Sticky Top Header (Back/Close) */}
@@ -1379,6 +1398,9 @@ const styles = StyleSheet.create({
         fontWeight: '800',
         color: '#fff',
     },
+    keyboardAvoidingView: {
+        flex: 1,
+    },
     // Rating modal
     modalOverlay: {
         flex: 1,
@@ -1390,9 +1412,13 @@ const styles = StyleSheet.create({
     modalContent: {
         backgroundColor: '#fff',
         borderRadius: 24,
-        padding: 28,
         width: '100%',
         maxWidth: 400,
+        maxHeight: '85%',
+        overflow: 'hidden',
+    },
+    modalScrollContent: {
+        padding: 28,
         alignItems: 'center',
     },
     modalTitle: {
