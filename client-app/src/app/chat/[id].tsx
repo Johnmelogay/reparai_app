@@ -169,13 +169,22 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace('/(tabs)/home');
+  };
+
   if (!requestId) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerBlock}>
           <Text style={styles.centerTitle}>Conversa não encontrada</Text>
           <Text style={styles.centerSub}>Pedido inválido para abrir o chat.</Text>
-          <Button title="Voltar" variant="outline" onPress={() => router.back()} />
+          <Button title="Voltar" variant="outline" onPress={handleBack} />
         </View>
       </SafeAreaView>
     );
@@ -208,7 +217,7 @@ export default function ChatRoomScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
           <ArrowLeft size={22} color={Colors.light.text} />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
