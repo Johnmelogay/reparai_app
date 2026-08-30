@@ -7,7 +7,6 @@ import React, { useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
-    Keyboard,
     KeyboardAvoidingView,
     Platform,
     StyleSheet,

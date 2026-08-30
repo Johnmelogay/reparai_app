@@ -2,12 +2,14 @@ import { useAuth } from '@/context/AuthContext';
 import { fetchProviderChatInbox } from '@/services/providerChatService';
 import { supabase } from '@/services/supabase';
 import { toErrorMessage } from '@/utils/error';
+import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
 export function useProviderChatInbox() {
     const { user } = useAuth();
     const providerId = user?.id;
+    const isFocused = useIsFocused();
     const queryClient = useQueryClient();
     const queryKey = ['provider_chat_inbox', providerId];
 
@@ -16,23 +18,29 @@ export function useProviderChatInbox() {
         queryFn: () => fetchProviderChatInbox(providerId!),
         enabled: !!providerId,
         staleTime: 30 * 1000,
-        refetchInterval: 8 * 1000,
     });
+
+    // Refetch garantido ao focar na tela de conversas do prestador
+    useEffect(() => {
+        if (isFocused && providerId) {
+            query.refetch();
+        }
+    }, [isFocused, providerId]);
 
     useEffect(() => {
         if (!providerId) return;
 
         const invalidate = () => queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
 
-        const notificationsChannel = supabase
-            .channel(`provider_chat_inbox_notifications_${providerId}`)
+        // Escuta novas mensagens na tabela canônica chat_messages
+        const chatChannel = supabase
+            .channel(`provider_chat_inbox_messages_${providerId}`)
             .on(
                 'postgres_changes',
                 {
                     event: '*',
                     schema: 'public',
-                    table: 'notifications',
-                    filter: `user_id=eq.${providerId}`,
+                    table: 'chat_messages',
                 },
                 invalidate
             )
@@ -53,7 +61,7 @@ export function useProviderChatInbox() {
             .subscribe();
 
         return () => {
-            supabase.removeChannel(notificationsChannel);
+            supabase.removeChannel(chatChannel);
             supabase.removeChannel(requestsChannel);
         };
     }, [providerId, queryClient]);
