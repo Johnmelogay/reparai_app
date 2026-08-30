@@ -4,7 +4,7 @@ import { useRequest } from '@/context/RequestContext';
 import { supabase } from '@/services/supabase';
 import { TicketStatus } from '@/types';
 import { BlurView } from 'expo-blur';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
     BadgeCheck,
     Banknote,
@@ -253,73 +253,89 @@ export default function TicketDetailScreen() {
     // Check if we already have it in context
     const contextHasTicket = currentTicket?.id === id;
 
-    // 1. Initial Data Fetch
-    useEffect(() => {
-        const fetchTicket = async () => {
-            if (!id) return;
-            try {
+    // 1. Data Fetch function (reusable for initial mount and focus refresh)
+    const fetchTicket = useCallback(async (options?: { silent?: boolean }) => {
+        if (!id) return;
+        const silent = options?.silent ?? false;
+        try {
+            if (!silent) {
                 setLoading(true);
-                const { data, error } = await supabase
-                    .from('requests')
-                    .select('*')
-                    .eq('id', id as string)
+            }
+            const { data, error } = await supabase
+                .from('requests')
+                .select('*')
+                .eq('id', id as string)
+                .single();
+
+            if (error) throw error;
+            if (!data) throw new Error('Ticket não encontrado');
+
+            setTicket({
+                id: data.id,
+                status: (data.status || 'finding') as TicketStatus,
+                category: data.category || 'Geral',
+                user_text: data.user_text,
+                address: data.address,
+                lat: data.lat,
+                lng: data.lng,
+                displacement_fee: data.displacement_fee,
+                displacement_payment_method: data.displacement_payment_method,
+                service_quote: data.service_quote,
+                service_payment_method: data.service_payment_method,
+                service_payment_status: data.service_payment_status,
+                provider_id: data.provider_id,
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+                ai_result_json: data.ai_result_json,
+                answers_json: data.answers_json,
+                done_provider_at: data.done_provider_at || null,
+                done_client_at: data.done_client_at || null,
+            });
+
+            if (data.provider_id) {
+                console.log('[Ticket] Fetching partner:', data.provider_id);
+                const { data: partnerData, error: partnerError } = await supabase
+                    .from('partners')
+                    .select('id, full_name, avatar_url, rating, service_category, location, phone')
+                    .eq('id', data.provider_id)
                     .single();
 
-                if (error) throw error;
-                if (!data) throw new Error('Ticket não encontrado');
+                if (partnerError) console.error('[Ticket] Partner fetch error:', partnerError);
+                console.log('[Ticket] Raw partner data:', JSON.stringify(partnerData)?.slice(0, 300));
 
-                setTicket({
-                    id: data.id,
-                    status: (data.status || 'finding') as TicketStatus,
-                    category: data.category || 'Geral',
-                    user_text: data.user_text,
-                    address: data.address,
-                    lat: data.lat,
-                    lng: data.lng,
-                    displacement_fee: data.displacement_fee,
-                    displacement_payment_method: data.displacement_payment_method,
-                    service_quote: data.service_quote,
-                    service_payment_method: data.service_payment_method,
-                    service_payment_status: data.service_payment_status,
-                    provider_id: data.provider_id,
-                    created_at: data.created_at,
-                    updated_at: data.updated_at,
-                    ai_result_json: data.ai_result_json,
-                    answers_json: data.answers_json,
-                    done_provider_at: data.done_provider_at || null,
-                    done_client_at: data.done_client_at || null,
-                });
-
-
-                if (data.provider_id) {
-                    console.log('[Ticket] Fetching partner:', data.provider_id);
-                    const { data: partnerData, error: partnerError } = await supabase
-                        .from('partners')
-                        .select('id, full_name, avatar_url, rating, service_category, location, phone')
-                        .eq('id', data.provider_id)
-                        .single();
-
-                    if (partnerError) console.error('[Ticket] Partner fetch error:', partnerError);
-                    console.log('[Ticket] Raw partner data:', JSON.stringify(partnerData)?.slice(0, 300));
-
-                    if (partnerData) {
-                        const parsedLocation = parseGeoPoint(partnerData.location);
-                        console.log('[Ticket] Parsed provider location:', parsedLocation);
-                        setProvider({
-                            ...partnerData,
-                            location: parsedLocation || undefined
-                        });
-                    }
+                if (partnerData) {
+                    const parsedLocation = parseGeoPoint(partnerData.location);
+                    console.log('[Ticket] Parsed provider location:', parsedLocation);
+                    setProvider({
+                        ...partnerData,
+                        location: parsedLocation || undefined
+                    });
                 }
-            } catch (err: any) {
+            }
+        } catch (err: any) {
+            if (!silent) {
                 setFetchError(err.message || 'Erro ao carregar ticket');
-            } finally {
+            } else {
+                console.warn('[Ticket] Silent refetch error:', err?.message || err);
+            }
+        } finally {
+            if (!silent) {
                 setLoading(false);
             }
-        };
-
-        fetchTicket();
+        }
     }, [id]);
+
+    // Initial Data Fetch
+    useEffect(() => {
+        fetchTicket({ silent: false });
+    }, [fetchTicket]);
+
+    // Focus Refetch (Defensive fallback when returning from chat or other screens)
+    useFocusEffect(
+        useCallback(() => {
+            fetchTicket({ silent: true });
+        }, [fetchTicket])
+    );
 
     // 2. Realtime Ticket Subscription
     useEffect(() => {
