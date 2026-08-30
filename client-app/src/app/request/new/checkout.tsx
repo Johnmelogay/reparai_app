@@ -24,7 +24,7 @@ export default function CheckoutScreen() {
         estimatedTime?: string | string[];
         message?: string | string[];
     }>();
-    const { setAssignedProvider, setStatus, currentTicket } = useRequest();
+    const { setAssignedProvider, setStatus, currentTicket, resetFunnel } = useRequest();
 
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [selectedPayment, setSelectedPayment] = useState<'credit_card' | 'pix' | 'cash'>('credit_card');
@@ -124,9 +124,16 @@ export default function CheckoutScreen() {
             setStatus('confirmed');
         }
 
+        const targetRequestId = requestId;
+        resetFunnel();
+        setStatus('confirmed');
         setIsSubmitting(false);
-        // Replace current screen so user can't "back" into checkout easily
-        router.replace(`/ticket/${requestId}?showSuccess=true`);
+
+        // Discard request funnel modal stack and navigate to ticket
+        if (router.canDismiss()) {
+            router.dismissAll();
+        }
+        router.push(`/ticket/${targetRequestId}?showSuccess=true`);
     };
 
     return (

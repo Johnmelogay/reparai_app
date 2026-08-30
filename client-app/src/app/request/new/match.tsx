@@ -63,7 +63,8 @@ export default function RequestMatchScreen() {
         currentTicket,
         category,
         funnelAnswers,
-        aiResult
+        aiResult,
+        resetFunnel,
     } = useRequest();
 
     const [searchRadiusKm, setSearchRadiusKm] = useState(INITIAL_RADIUS_KM);
@@ -478,6 +479,16 @@ export default function RequestMatchScreen() {
         if (assignedProvider?.id) {
             router.push(`/provider/${assignedProvider.id}`);
         }
+    };
+
+    const handleGoHome = () => {
+        resetFunnel();
+        setStatus('idle');
+        setAssignedProvider(null);
+        if (router.canDismiss()) {
+            router.dismissAll();
+        }
+        router.replace('/(tabs)/home');
     };
 
     const handleAcceptProvider = (offer: any) => {
@@ -909,6 +920,10 @@ export default function RequestMatchScreen() {
                                 <View style={styles.quickLinkDivider} />
                                 <TouchableOpacity style={styles.quickLink} onPress={handleOpenProvider} activeOpacity={0.7}>
                                     <Text style={styles.quickLinkText}>Perfil do prestador</Text>
+                                </TouchableOpacity>
+                                <View style={styles.quickLinkDivider} />
+                                <TouchableOpacity style={styles.quickLink} onPress={handleGoHome} activeOpacity={0.7}>
+                                    <Text style={[styles.quickLinkText, { color: Colors.light.primary, fontWeight: '700' }]}>Ir para o início</Text>
                                 </TouchableOpacity>
                             </View>
 

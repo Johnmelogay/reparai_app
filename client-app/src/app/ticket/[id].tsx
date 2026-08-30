@@ -217,13 +217,18 @@ export default function TicketDetailScreen() {
             });
             if (error) throw error;
             setRatingVisible(false);
-            Alert.alert('Obrigado!', 'Sua avaliação foi enviada.');
+            Alert.alert('Obrigado!', 'Sua avaliação foi enviada.', [
+                {
+                    text: 'OK',
+                    onPress: () => router.replace('/(tabs)/home'),
+                },
+            ]);
         } catch (err: any) {
             Alert.alert('Erro', err.message || 'Não foi possível enviar a avaliação.');
         } finally {
             setRatingLoading(false);
         }
-    }, [ticket, provider, ratingValue, ratingComment, ratingLoading]);
+    }, [ticket, provider, ratingValue, ratingComment, ratingLoading, router]);
 
     // Gradient: faded at client end → solid green at provider end (conveys direction of travel)
     const routeGradientColors = useMemo(() => {
@@ -562,7 +567,7 @@ export default function TicketDetailScreen() {
         return (
             <SafeAreaView style={[styles.container, styles.centerContent]}>
                 <Text style={styles.errorText}>{fetchError || 'Ticket não encontrado'}</Text>
-                <Button title="Voltar" variant="ghost" onPress={() => router.back()} />
+                <Button title="Voltar para o Início" variant="ghost" onPress={() => router.replace('/(tabs)/home')} />
             </SafeAreaView>
         );
     }
@@ -952,7 +957,15 @@ export default function TicketDetailScreen() {
             </ScrollView>
 
             {/* Rating Modal */}
-            <Modal visible={ratingVisible} transparent animationType="fade">
+            <Modal
+                visible={ratingVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => {
+                    setRatingVisible(false);
+                    router.replace('/(tabs)/home');
+                }}
+            >
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
                         <Text style={styles.modalTitle}>Avaliar prestador</Text>
@@ -993,7 +1006,13 @@ export default function TicketDetailScreen() {
                             )}
                         </TouchableOpacity>
 
-                        <TouchableOpacity onPress={() => setRatingVisible(false)} style={styles.modalSkipBtn}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                setRatingVisible(false);
+                                router.replace('/(tabs)/home');
+                            }}
+                            style={styles.modalSkipBtn}
+                        >
                             <Text style={styles.modalSkipText}>Pular</Text>
                         </TouchableOpacity>
                     </View>
@@ -1002,7 +1021,7 @@ export default function TicketDetailScreen() {
 
             {/* Sticky Top Header (Back/Close) */}
             <SafeAreaView style={styles.stickyHeader} edges={['top']}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButtonSticky}>
+                <TouchableOpacity onPress={() => router.replace('/(tabs)/home')} style={styles.backButtonSticky}>
                     <X size={24} color="#1F2937" />
                 </TouchableOpacity>
             </SafeAreaView>
