@@ -4,6 +4,7 @@ import { Session, User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { AppState, Platform } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession(); // For web
 
@@ -53,6 +54,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+
+    // Auto-refresh lifecycle management (official Supabase React Native pattern)
+    useEffect(() => {
+        if (Platform.OS === 'web') return;
+
+        if (AppState.currentState === 'active') {
+            supabase.auth.startAutoRefresh();
+        } else {
+            supabase.auth.stopAutoRefresh();
+        }
+
+        const subscription = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                supabase.auth.startAutoRefresh();
+            } else {
+                supabase.auth.stopAutoRefresh();
+            }
+        });
+
+        return () => {
+            subscription.remove();
+            supabase.auth.stopAutoRefresh();
+        };
+    }, []);
 
     useEffect(() => {
         // 1. Check active session

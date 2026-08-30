@@ -49,11 +49,26 @@ const fetchPartnersFromRPC = async (
             });
 
             if (rpcError) {
-                logger.error('RPC get_map_partners_v2 failed', {
-                    code: rpcError.code,
-                    message: rpcError.message,
-                    details: rpcError.details,
-                });
+                const isAuthOrNetworkError =
+                    rpcError.code === '42501' ||
+                    rpcError.code === 'PGRST301' ||
+                    rpcError.message?.toLowerCase().includes('not_authenticated') ||
+                    rpcError.message?.toLowerCase().includes('network') ||
+                    rpcError.message?.toLowerCase().includes('fetch');
+
+                if (isAuthOrNetworkError) {
+                    logger.warn('RPC get_map_partners_v2 auth/network transient issue', {
+                        code: rpcError.code,
+                        message: rpcError.message,
+                        details: rpcError.details,
+                    });
+                } else {
+                    logger.error('RPC get_map_partners_v2 unexpected failure', {
+                        code: rpcError.code,
+                        message: rpcError.message,
+                        details: rpcError.details,
+                    });
+                }
                 throw new Error('Não foi possível carregar prestadores.');
             }
 
