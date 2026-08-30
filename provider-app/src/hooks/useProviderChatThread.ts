@@ -93,13 +93,21 @@ export function useProviderChatThread(requestId?: string) {
                         queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
                     }
                 } catch {
-                    // Em caso de erro, interrompe o ciclo para evitar loop contínuo
+                    console.warn('Falha temporária ao marcar mensagens como lidas', { requestId });
                     pendingMarkReadRef.current = false;
                     break;
                 }
             }
         } finally {
             isMarkingReadRef.current = false;
+
+            if (
+                pendingMarkReadRef.current &&
+                isMountedRef.current &&
+                isThreadVisiblyActiveRef.current
+            ) {
+                void triggerMarkRead();
+            }
         }
     }, [providerId, requestId, queryClient, threadQueryKey]);
 
