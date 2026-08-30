@@ -1,19 +1,24 @@
+import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
 import { Button } from '@/components/ui/Button';
 import { Colors } from '@/constants/Colors';
+import { useAuth } from '@/context/AuthContext';
 import { useMyRequests } from '@/hooks/useMyRequests';
+import { useNotifications as useNotificationsHook } from '@/hooks/useNotifications';
+import { Notification } from '@/types';
 import { getClientActionLabel, needsClientAction } from '@/utils/orderActions';
 import { useRouter } from 'expo-router';
-import { Bell, CheckCheck } from 'lucide-react-native';
-import React, { useState, useCallback } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Bell, CheckCheck, MessageCircle } from 'lucide-react-native';
+import React, { useState } from 'react';
+import {
+    ActivityIndicator,
+    FlatList,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
-
-import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
-import { useAuth } from '@/context/AuthContext';
-import { useNotifications as useNotificationsHook } from '@/hooks/useNotifications';
-import { useNotifications as useNotificationContext } from '@/context/NotificationContext';
-import { useRequest } from '@/context/RequestContext';
 
 // Helper function to format notification time
 function formatTime(timestamp: string): string {
@@ -37,30 +42,37 @@ export default function NotificationsScreen() {
     const { isGuest } = useAuth();
     const [showAuth, setShowAuth] = useState(false);
     const router = useRouter();
-    const { notifications, loading, unreadCount, fetchNotifications, markAsRead, markAllAsRead } = useNotificationsHook();
-    const { resetBadge } = useNotificationContext();
+    const {
+        notifications,
+        loading,
+        unreadCount,
+        fetchNotifications,
+        markAsRead,
+        markAllAsRead,
+    } = useNotificationsHook();
     const { allRequests } = useMyRequests();
-    const { loadTicket } = useRequest();
     const pendingActions = allRequests.filter((request) => needsClientAction(request.status));
 
-    const handleOpenTicket = async (ticketId: string, status: string) => {
-        await loadTicket(ticketId);
+    const handlePressNotification = (item: Notification) => {
+        // Marca como lida de forma assíncrona sem bloquear navegação
+        if (!item.is_read) {
+            markAsRead(item.id);
+        }
+
+        if (item.type === 'message' && item.related_id) {
+            router.push(`/chat/${item.related_id}` as any);
+        } else if (item.related_id) {
+            router.push(`/ticket/${item.related_id}` as any);
+        }
+    };
+
+    const handleOpenTicket = (ticketId: string, status: string) => {
         if (status === 'finding' || status === 'offered') {
             router.push('/request/new/match' as any);
         } else {
             router.push(`/ticket/${ticketId}` as any);
         }
     };
-
-    // Clear badge and mark as read when entering this screen
-    useFocusEffect(
-        useCallback(() => {
-            if (unreadCount > 0) {
-                markAllAsRead();
-                resetBadge();
-            }
-        }, [unreadCount, markAllAsRead, resetBadge])
-    );
 
     if (isGuest) {
         return (
@@ -71,7 +83,7 @@ export default function NotificationsScreen() {
                     </View>
                     <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111', marginBottom: 10 }}>Notificações</Text>
                     <Text style={{ textAlign: 'center', color: '#666', fontSize: 16, lineHeight: 24 }}>
-                        Faça login para receber atualizações sobre seus pedidos e promoções.
+                        Faça login para receber atualizações sobre seus pedidos e mensagens.
                     </Text>
                 </View>
 
@@ -145,26 +157,33 @@ export default function NotificationsScreen() {
                         <View style={styles.emptyContainer}>
                             <Bell size={48} color="#D1D5DB" strokeWidth={1.5} />
                             <Text style={styles.emptyText}>Nenhuma notificação nova</Text>
-                            <Text style={styles.emptySubtext}>Você receberá atualizações sobre seus pedidos aqui</Text>
+                            <Text style={styles.emptySubtext}>Você receberá atualizações sobre seus pedidos e mensagens aqui</Text>
                         </View>
                     }
-                    renderItem={({ item }) => (
-                        <TouchableOpacity
-                            style={[styles.item, !item.is_read && styles.unread]}
-                            onPress={() => !item.is_read && markAsRead(item.id)}
-                            activeOpacity={0.7}
-                        >
-                            <View style={styles.iconContainer}>
-                                <Bell size={20} color={!item.is_read ? Colors.light.primary : '#9CA3AF'} />
-                            </View>
-                            <View style={styles.textContainer}>
-                                <Text style={styles.itemTitle}>{item.title}</Text>
-                                <Text style={styles.itemBody}>{item.message}</Text>
-                                <Text style={styles.itemTime}>{formatTime(item.created_at)}</Text>
-                            </View>
-                            {!item.is_read && <View style={styles.dot} />}
-                        </TouchableOpacity>
-                    )}
+                    renderItem={({ item }) => {
+                        const isMessage = item.type === 'message';
+                        return (
+                            <TouchableOpacity
+                                style={[styles.item, !item.is_read && styles.unread]}
+                                onPress={() => handlePressNotification(item)}
+                                activeOpacity={0.7}
+                            >
+                                <View style={styles.iconContainer}>
+                                    {isMessage ? (
+                                        <MessageCircle size={20} color={!item.is_read ? Colors.light.primary : '#9CA3AF'} />
+                                    ) : (
+                                        <Bell size={20} color={!item.is_read ? Colors.light.primary : '#9CA3AF'} />
+                                    )}
+                                </View>
+                                <View style={styles.textContainer}>
+                                    <Text style={styles.itemTitle}>{item.title || (isMessage ? 'Nova mensagem' : 'Notificação')}</Text>
+                                    <Text style={styles.itemBody}>{item.message}</Text>
+                                    <Text style={styles.itemTime}>{formatTime(item.created_at)}</Text>
+                                </View>
+                                {!item.is_read && <View style={styles.dot} />}
+                            </TouchableOpacity>
+                        );
+                    }}
                 />
             )}
         </SafeAreaView>

@@ -1,10 +1,15 @@
 import { Colors } from '@/constants/Colors';
+import { useProviderChatInbox } from '@/hooks/useProviderChatInbox';
 import { Tabs } from 'expo-router';
 import { Briefcase, ClipboardList, MessageCircle, User } from 'lucide-react-native';
 import React from 'react';
 import { Platform } from 'react-native';
 
 export default function TabLayout() {
+    const { threads } = useProviderChatInbox();
+    const unreadMessagesCount = threads.reduce((sum, item) => sum + (item.unreadCount || 0), 0);
+    const chatBadge = unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : String(unreadMessagesCount)) : undefined;
+
     return (
         <Tabs
             screenOptions={{
@@ -44,6 +49,8 @@ export default function TabLayout() {
                 options={{
                     title: 'Chat',
                     tabBarIcon: ({ color }) => <MessageCircle size={24} color={color} />,
+                    tabBarBadge: chatBadge,
+                    tabBarBadgeStyle: { backgroundColor: Colors.light.primary, fontSize: 10 },
                 }}
             />
             <Tabs.Screen

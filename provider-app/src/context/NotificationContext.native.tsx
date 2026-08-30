@@ -1,6 +1,7 @@
+import { InAppBannerData, InAppNotificationBanner } from '@/components/InAppNotificationBanner';
 import { supabase } from '@/services/supabase';
 import * as Notifications from 'expo-notifications';
-import { useRouter } from 'expo-router';
+import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -19,7 +20,6 @@ try {
     });
 } catch (e) {
     notificationsAvailable = false;
-    console.warn('⚠️ expo-notifications native module not available (Expo Go). Notifications disabled.');
 }
 
 export interface NotificationContextType {
@@ -27,6 +27,8 @@ export interface NotificationContextType {
     notification: Notifications.Notification | null;
     badgeCount: number;
     resetBadge: () => Promise<void>;
+    inAppBanner: InAppBannerData | null;
+    dismissBanner: () => void;
 }
 
 const NotificationContext = createContext<NotificationContextType>({
@@ -34,16 +36,28 @@ const NotificationContext = createContext<NotificationContextType>({
     notification: null,
     badgeCount: 0,
     resetBadge: async () => { },
+    inAppBanner: null,
+    dismissBanner: () => { },
 });
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
     const { user } = useAuth();
     const router = useRouter();
+    const pathname = usePathname();
+    const params = useGlobalSearchParams<{ id?: string; requestId?: string }>();
     const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
     const [notification, setNotification] = useState<Notifications.Notification | null>(null);
     const [badgeCount, setBadgeCount] = useState(0);
+    const [inAppBanner, setInAppBanner] = useState<InAppBannerData | null>(null);
+    const seenNotificationIdsRef = useRef<Set<string>>(new Set());
     const notificationListener = useRef<any>(null);
     const responseListener = useRef<any>(null);
+
+    // Keep active route reference to suppress banner when inside the active chat thread
+    const currentRouteRef = useRef({ pathname, activeRequestId: params.id || params.requestId });
+    useEffect(() => {
+        currentRouteRef.current = { pathname, activeRequestId: params.id || params.requestId };
+    }, [pathname, params.id, params.requestId]);
 
     useEffect(() => {
         if (!notificationsAvailable) return;
@@ -51,25 +65,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         registerForPushNotificationsAsync().then(token => setExpoPushToken(token ?? null));
 
         try {
-            // This listener is fired whenever a notification is received while the app is foregrounded
             notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
                 setNotification(notification);
                 setBadgeCount(prev => prev + 1);
             });
 
-            // This listener is fired whenever a user taps on or interacts with a notification
             responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
                 const data = response.notification.request.content.data;
                 if (data?.requestId) {
                     if (data.type === 'message') {
-                        // @ts-ignore
-                        router.push(`/chat/${data.requestId}`);
+                        router.push(`/chat/${data.requestId}` as any);
                     } else if (data.type === 'job_request') {
-                        // @ts-ignore
-                        router.push({ pathname: '/jobDetail', params: { requestId: data.requestId } });
+                        router.push({ pathname: '/jobDetail', params: { requestId: data.requestId } } as any);
                     } else {
-                        // @ts-ignore
-                        router.push(`/ticket/${data.requestId}`);
+                        router.push(`/ticket/${data.requestId}` as any);
                     }
                 }
             });
@@ -83,12 +92,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         };
     }, [router]);
 
-    // Also listen for Supabase notifications table directly (Realtime fallback/primary for chat)
+    // Listen for Supabase notifications table directly (Realtime in-app foreground banner)
     useEffect(() => {
         if (!user) return;
 
         const channel = supabase
-            .channel(`provider_notifications_${user.id}`)
+            .channel(`provider_inapp_notifications_${user.id}`)
             .on(
                 'postgres_changes',
                 {
@@ -97,27 +106,37 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                     table: 'notifications',
                     filter: `user_id=eq.${user.id}`,
                 },
-                async (payload: any) => {
-                    console.log('🔔 Provider: New notification record:', payload.new);
-                    
-                    if (!notificationsAvailable) return;
+                (payload: any) => {
+                    const record = payload.new;
+                    if (!record || !record.id) return;
 
-                    // If app is in foreground, trigger a local notification to ensure sound/alert
-                    try {
-                        await Notifications.scheduleNotificationAsync({
-                            content: {
-                                title: payload.new.title?.includes(':') ? 'Nova mensagem' : payload.new.title,
-                                body: payload.new.message,
-                                data: { 
-                                    requestId: payload.new.related_id,
-                                    type: payload.new.type
-                                },
-                            },
-                            trigger: null, // show immediately
-                        });
-                    } catch (e) {
-                        console.warn('⚠️ Failed to schedule local notification:', e);
+                    setBadgeCount(prev => prev + 1);
+
+                    // Deduplicate by notification ID
+                    if (seenNotificationIdsRef.current.has(record.id)) return;
+                    seenNotificationIdsRef.current.add(record.id);
+
+                    const { pathname: currentPath, activeRequestId } = currentRouteRef.current;
+                    const isChatActiveForSameRequest =
+                        record.type === 'message' &&
+                        record.related_id &&
+                        (currentPath?.includes('/chat') && (activeRequestId === record.related_id || currentPath.includes(record.related_id)));
+
+                    // Do not show banner if provider is currently inside this chat thread
+                    if (isChatActiveForSameRequest) {
+                        return;
                     }
+
+                    const bannerTitle = record.title?.includes(':') ? 'Nova mensagem' : (record.title || 'Notificação');
+                    const bannerMessage = record.message || 'Você recebeu uma atualização no atendimento.';
+
+                    setInAppBanner({
+                        id: record.id,
+                        title: bannerTitle,
+                        message: bannerMessage,
+                        type: record.type,
+                        relatedId: record.related_id,
+                    });
                 }
             )
             .subscribe();
@@ -138,9 +157,38 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         setBadgeCount(0);
     };
 
+    const dismissBanner = () => {
+        setInAppBanner(null);
+    };
+
+    const handleBannerPress = (banner: InAppBannerData) => {
+        dismissBanner();
+        if (banner.type === 'message' && banner.relatedId) {
+            router.push(`/chat/${banner.relatedId}` as any);
+        } else if (banner.type === 'job_request' && banner.relatedId) {
+            router.push({ pathname: '/jobDetail', params: { requestId: banner.relatedId } } as any);
+        } else if (banner.relatedId) {
+            router.push(`/chat/${banner.relatedId}` as any);
+        }
+    };
+
     return (
-        <NotificationContext.Provider value={{ expoPushToken, notification, badgeCount, resetBadge }}>
+        <NotificationContext.Provider
+            value={{
+                expoPushToken,
+                notification,
+                badgeCount,
+                resetBadge,
+                inAppBanner,
+                dismissBanner,
+            }}
+        >
             {children}
+            <InAppNotificationBanner
+                banner={inAppBanner}
+                onDismiss={dismissBanner}
+                onPress={handleBannerPress}
+            />
         </NotificationContext.Provider>
     );
 }
@@ -170,7 +218,7 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
         if (finalStatus !== 'granted') {
             return null;
         }
-        
+
         token = (await Notifications.getExpoPushTokenAsync()).data;
     } catch (e) {
         console.warn('⚠️ Failed to register for push notifications:', e);

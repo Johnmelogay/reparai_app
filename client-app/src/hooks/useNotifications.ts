@@ -24,7 +24,6 @@ export function useNotifications() {
                 .from('notifications')
                 .select('*')
                 .eq('user_id', user.id)
-                .neq('type', 'message')
                 .order('created_at', { ascending: false });
 
             if (fetchError) throw fetchError;
@@ -122,7 +121,7 @@ export function useNotifications() {
         if (!user) return;
 
         const channel = supabase
-            .channel('notifications')
+            .channel(`user_notifications_hook_${user.id}`)
             .on(
                 'postgres_changes',
                 {
@@ -132,13 +131,10 @@ export function useNotifications() {
                     filter: `user_id=eq.${user.id}`
                 },
                 (payload: any) => {
-                    const newType = payload?.new?.type;
-                    const oldType = payload?.old?.type;
-                    if (newType === 'message' || oldType === 'message') {
-                        return;
-                    }
                     queryClient.setQueryData<Notification[]>(queryKey, (prev = []) => {
                         if (payload.eventType === 'INSERT') {
+                            // Deduplicate by ID
+                            if (prev.some((n) => n.id === payload.new.id)) return prev;
                             return [payload.new as Notification, ...prev];
                         } else if (payload.eventType === 'UPDATE') {
                             return prev.map((n: Notification) => n.id === payload.new.id ? payload.new as Notification : n);
