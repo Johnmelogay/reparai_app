@@ -5,6 +5,7 @@ import { categoryLabel } from '@/utils/category';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { confirmAction } from '@/utils/confirmAction';
 import {
     ChevronRight,
     HelpCircle,
@@ -18,7 +19,6 @@ import {
 } from 'lucide-react-native';
 import React from 'react';
 import {
-    Alert,
     ScrollView,
     StyleSheet,
     Text,
@@ -66,15 +66,17 @@ export default function ProfileScreen() {
     const { profile } = useProviderProfile();
     const { data: stats } = useProviderStats(user?.id);
 
-    const handleSignOut = () => {
-        Alert.alert(
-            'Sair',
-            'Tem certeza que deseja sair?',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                { text: 'Sair', style: 'destructive', onPress: signOut },
-            ]
-        );
+    const handleSignOut = async () => {
+        const confirmed = await confirmAction({
+            title: 'Sair',
+            message: 'Tem certeza que deseja sair?',
+            confirmLabel: 'Sair',
+            cancelLabel: 'Cancelar',
+            destructive: true,
+        });
+        if (confirmed) {
+            await signOut();
+        }
     };
 
     return (

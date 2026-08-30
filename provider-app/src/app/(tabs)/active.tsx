@@ -4,6 +4,7 @@ import { supabase } from '@/services/supabase';
 import { Image as ExpoImage } from 'expo-image';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
+import { confirmAction } from '@/utils/confirmAction';
 import { Briefcase, CalendarDays, CheckCircle2, Clock3, FileText, MapPin, MessageCircle, Navigation, Star, ThumbsUp } from 'lucide-react-native';
 import React, { useMemo, useState } from 'react';
 import {
@@ -438,28 +439,24 @@ export default function ServicesScreen() {
 
     const handleConfirmDone = async (requestId: string) => {
         if (actionLoading) return;
-        Alert.alert(
-            'Finalizar serviço',
-            'Confirma que o serviço foi concluído? O cliente também precisará confirmar.',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Confirmar',
-                    onPress: async () => {
-                        setActionLoading(requestId);
-                        try {
-                            const { error: err } = await supabase.rpc('provider_confirm_done', { p_request_id: requestId });
-                            if (err) throw err;
-                            refetch();
-                        } catch (e: any) {
-                            Alert.alert('Erro', e?.message || 'Não foi possível finalizar.');
-                        } finally {
-                            setActionLoading(null);
-                        }
-                    },
-                },
-            ]
-        );
+        const confirmed = await confirmAction({
+            title: 'Finalizar serviço',
+            message: 'Confirma que o serviço foi concluído? O cliente também precisará confirmar.',
+            confirmLabel: 'Confirmar',
+            cancelLabel: 'Cancelar',
+        });
+        if (!confirmed) return;
+
+        setActionLoading(requestId);
+        try {
+            const { error: err } = await supabase.rpc('provider_confirm_done', { p_request_id: requestId });
+            if (err) throw err;
+            refetch();
+        } catch (e: any) {
+            Alert.alert('Erro', e?.message || 'Não foi possível finalizar.');
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     const handleSubmitRating = async (rating: number, comment: string) => {

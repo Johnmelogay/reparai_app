@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
 import { useRouter } from 'expo-router';
+import { confirmAction } from '@/utils/confirmAction';
 import {
     ArrowLeft,
     Camera,
@@ -140,11 +141,17 @@ export default function HighlightsScreen() {
         },
     });
 
-    const handleDelete = (item: PartnerHighlight) => {
-        Alert.alert('Excluir destaque', `Tem certeza que deseja excluir "${item.name}"?`, [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Excluir', style: 'destructive', onPress: () => deleteMutation.mutate(item.id) },
-        ]);
+    const handleDelete = async (item: PartnerHighlight) => {
+        const confirmed = await confirmAction({
+            title: 'Excluir destaque',
+            message: `Tem certeza que deseja excluir "${item.name}"?`,
+            confirmLabel: 'Excluir',
+            cancelLabel: 'Cancelar',
+            destructive: true,
+        });
+        if (confirmed) {
+            deleteMutation.mutate(item.id);
+        }
     };
 
     const handleEdit = (item: PartnerHighlight) => {
