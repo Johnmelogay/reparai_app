@@ -248,6 +248,7 @@ export default function JobsScreen() {
     const [offerPrice, setOfferPrice] = useState('');
     const [offerEta, setOfferEta] = useState('');
     const [offerMessage, setOfferMessage] = useState('');
+    const [isTogglingOnline, setIsTogglingOnline] = useState(false);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     const autoOpenOfferRef = useRef<string | null>(null);
 
@@ -319,41 +320,48 @@ export default function JobsScreen() {
     }, []);
 
     const handleToggleOnline = useCallback(async (value: boolean) => {
-        if (value) {
-            const missing: string[] = [];
-            if (!profile?.full_name?.trim()) missing.push('nome');
-            if (!profile?.service_category) missing.push('categoria');
+        if (isTogglingOnline) return;
+        setIsTogglingOnline(true);
 
-            // Always refresh geolocation when going online to avoid stale dispatch radius.
-            const syncedNow = await syncProviderLocation({ requestPermission: true, silent: false });
-            const hasLocation = syncedNow || !!profile?.location;
+        try {
+            if (value) {
+                const missing: string[] = [];
+                if (!profile?.full_name?.trim()) missing.push('nome');
+                if (!profile?.service_category) missing.push('categoria');
 
-            if (!hasLocation) missing.push('localização');
+                if (missing.length > 0) {
+                    Alert.alert(
+                        'Complete o perfil para ficar online',
+                        `Faltando: ${missing.join(', ')}.`,
+                        [
+                            { text: 'Agora não', style: 'cancel' },
+                            {
+                                text: 'Completar Perfil',
+                                onPress: () => router.push('/profile/edit'),
+                            },
+                        ]
+                    );
+                    return;
+                }
 
-            if (missing.length > 0) {
-                Alert.alert(
-                    'Complete o perfil para ficar online',
-                    `Faltando: ${missing.join(', ')}.`,
-                    [
-                        { text: 'Agora não', style: 'cancel' },
-                        {
-                            text: 'Completar Perfil',
-                            onPress: () => router.push('/profile/edit'),
-                        },
-                    ]
-                );
-                return;
+                // Sincronização obrigatória e em tempo real da localização
+                const syncedNow = await syncProviderLocation({ requestPermission: true, silent: false });
+                if (!syncedNow) {
+                    return;
+                }
             }
-        }
 
-        const { error } = await toggleOnline(value);
-        if (error) {
-            Alert.alert(
-                'Erro ao atualizar status',
-                error instanceof Error ? error.message : 'Não foi possível atualizar seu status online.'
-            );
+            const { error } = await toggleOnline(value);
+            if (error) {
+                Alert.alert(
+                    'Erro ao atualizar status',
+                    error instanceof Error ? error.message : 'Não foi possível atualizar seu status online.'
+                );
+            }
+        } finally {
+            setIsTogglingOnline(false);
         }
-    }, [profile?.full_name, profile?.location, profile?.service_category, router, syncProviderLocation, toggleOnline]);
+    }, [isTogglingOnline, profile?.full_name, profile?.service_category, router, syncProviderLocation, toggleOnline]);
 
     useEffect(() => {
         if (!isOnline) return;
@@ -517,6 +525,7 @@ export default function JobsScreen() {
                         <Switch
                             value={isOnline}
                             onValueChange={handleToggleOnline}
+                            disabled={isTogglingOnline}
                             trackColor={{
                                 false: '#ffffff30',
                                 true: Colors.light.online + '60',
