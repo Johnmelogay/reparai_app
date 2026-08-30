@@ -2,7 +2,7 @@ import { Colors, Layout } from '@/constants/Colors';
 import { useProviderChatThread } from '@/hooks/useProviderChatThread';
 import { toErrorMessage } from '@/utils/error';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, MessageCircle, ShieldCheck } from 'lucide-react-native';
+import { ArrowLeft, Check, CheckCheck, MessageCircle, ShieldCheck } from 'lucide-react-native';
 import React, { useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -170,15 +170,33 @@ export default function ProviderChatRoomScreen() {
                 contentContainerStyle={[styles.messagesContent, messages.length === 0 && { flexGrow: 0, paddingBottom: 8 }]}
                 renderItem={({ item }) => {
                     const outgoing = item.direction === 'outgoing';
+                    const isRead = !!item.readAt;
                     return (
                         <View style={[styles.msgRow, outgoing ? styles.msgRowOut : styles.msgRowIn]}>
                             <View style={[styles.msgBubble, outgoing ? styles.msgBubbleOut : styles.msgBubbleIn]}>
                                 <Text style={[styles.msgText, outgoing ? styles.msgTextOut : styles.msgTextIn]}>
                                     {item.text}
                                 </Text>
-                                <Text style={[styles.msgTime, outgoing ? styles.msgTimeOut : styles.msgTimeIn]}>
-                                    {formatTime(item.createdAt)}
-                                </Text>
+                                <View style={styles.msgMetaRow}>
+                                    <Text style={[styles.msgTime, outgoing ? styles.msgTimeOut : styles.msgTimeIn]}>
+                                        {formatTime(item.createdAt)}
+                                    </Text>
+                                    {outgoing && (
+                                        <View style={styles.receiptContainer} accessibilityLabel={isRead ? 'Mensagem lida' : 'Mensagem enviada'}>
+                                            {isRead ? (
+                                                <View style={styles.receiptInner}>
+                                                    <CheckCheck size={12} color="#BAE6FD" />
+                                                    <Text style={styles.receiptTextRead}>Lida</Text>
+                                                </View>
+                                            ) : (
+                                                <View style={styles.receiptInner}>
+                                                    <Check size={12} color="rgba(255,255,255,0.75)" />
+                                                    <Text style={styles.receiptTextSent}>Enviada</Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                    )}
+                                </View>
                             </View>
                         </View>
                     );
@@ -377,15 +395,38 @@ const styles = StyleSheet.create({
         color: '#fff',
     },
     msgTime: {
-        marginTop: 4,
         fontSize: 11,
-        alignSelf: 'flex-end',
     },
     msgTimeIn: {
         color: Colors.light.textMuted,
     },
     msgTimeOut: {
         color: '#ffffffcc',
+    },
+    msgMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        marginTop: 4,
+        gap: 4,
+    },
+    receiptContainer: {
+        marginLeft: 2,
+    },
+    receiptInner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+    },
+    receiptTextSent: {
+        fontSize: 10,
+        fontWeight: '500',
+        color: '#ffffffcc',
+    },
+    receiptTextRead: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#BAE6FD',
     },
     inputRow: {
         flexDirection: 'row',

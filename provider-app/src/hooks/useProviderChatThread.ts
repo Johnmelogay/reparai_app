@@ -1,4 +1,5 @@
 import { useAuth } from '@/context/AuthContext';
+import { useAppVisibility } from '@/hooks/useAppVisibility';
 import {
     fetchProviderChatThread,
     markProviderChatThreadAsRead,
@@ -9,7 +10,7 @@ import { toErrorMessage } from '@/utils/error';
 import { useIsFocused } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 interface SendMessageVariables {
     requestId: string;
@@ -21,9 +22,17 @@ export function useProviderChatThread(requestId?: string) {
     const { user } = useAuth();
     const providerId = user?.id;
     const isFocused = useIsFocused();
+    const isAppVisible = useAppVisibility();
     const queryClient = useQueryClient();
     const isMarkingReadRef = useRef(false);
-    const threadQueryKey = ['provider_chat_thread', providerId, requestId];
+    const channelIdRef = useRef(Math.random().toString(36).substring(2, 9));
+    const threadQueryKey = useMemo(() => ['provider_chat_thread', providerId, requestId], [providerId, requestId]);
+
+    const isThreadVisiblyActive = isFocused && isAppVisible;
+    const isThreadVisiblyActiveRef = useRef(isThreadVisiblyActive);
+    useEffect(() => {
+        isThreadVisiblyActiveRef.current = isThreadVisiblyActive;
+    }, [isThreadVisiblyActive]);
 
     const query = useQuery({
         queryKey: threadQueryKey,
@@ -40,50 +49,55 @@ export function useProviderChatThread(requestId?: string) {
             return sendProviderChatMessage(reqId, text, clientMessageId);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['provider_chat_thread', providerId, requestId] });
+            queryClient.invalidateQueries({ queryKey: threadQueryKey });
             queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
         },
     });
 
-    // Marcação de leitura acionada quando a tela está em foco e há mensagens não lidas
+    // Função segura e coalescida para marcar mensagens da thread como lidas
+    const triggerMarkRead = useCallback(async () => {
+        if (!providerId || !requestId || !isThreadVisiblyActiveRef.current || isMarkingReadRef.current) return;
+
+        isMarkingReadRef.current = true;
+        try {
+            const updatedCount = await markProviderChatThreadAsRead(requestId);
+            if (updatedCount > 0) {
+                queryClient.invalidateQueries({ queryKey: threadQueryKey });
+                queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
+            }
+        } catch {
+            // Falha silenciosa não deve quebrar a experiência
+        } finally {
+            isMarkingReadRef.current = false;
+        }
+    }, [providerId, requestId, queryClient, threadQueryKey]);
+
+    // Marcação de leitura acionada quando a thread está visivelmente ativa e há mensagens não lidas
     useEffect(() => {
-        if (!providerId || !requestId || !isFocused || isMarkingReadRef.current) return;
+        if (!isThreadVisiblyActive || !providerId || !requestId) return;
 
         const hasUnreadIncoming = query.data?.messages?.some(
             (m) => m.direction === 'incoming' && !m.readAt
         );
 
         if (hasUnreadIncoming) {
-            isMarkingReadRef.current = true;
-            markProviderChatThreadAsRead(requestId)
-                .then((updatedCount) => {
-                    if (updatedCount > 0) {
-                        queryClient.invalidateQueries({ queryKey: ['provider_chat_thread', providerId, requestId] });
-                        queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
-                    }
-                })
-                .catch(() => {
-                    // Falha silenciosa não deve quebrar a experiência
-                })
-                .finally(() => {
-                    isMarkingReadRef.current = false;
-                });
+            triggerMarkRead();
         }
-    }, [providerId, requestId, isFocused, query.data?.messages, queryClient]);
+    }, [isThreadVisiblyActive, providerId, requestId, query.data?.messages, triggerMarkRead]);
 
-    // Refetch garantido ao recuperar foco na tela
+    // Refetch garantido ao transicionar para visivelmente ativo
     useEffect(() => {
-        if (isFocused && requestId && providerId) {
+        if (isThreadVisiblyActive && requestId && providerId) {
             query.refetch();
         }
-    }, [isFocused, requestId, providerId]);
+    }, [isThreadVisiblyActive, requestId, providerId]);
 
     // Subscription Realtime na tabela canônica chat_messages e requests
     useEffect(() => {
         if (!providerId || !requestId) return;
 
         const chatChannel = supabase
-            .channel(`provider_chat_thread_messages_${requestId}`)
+            .channel(`provider_chat_thread_messages_${requestId}_${channelIdRef.current}`)
             .on(
                 'postgres_changes',
                 {
@@ -93,19 +107,23 @@ export function useProviderChatThread(requestId?: string) {
                     filter: `request_id=eq.${requestId}`,
                 },
                 (payload) => {
-                    queryClient.invalidateQueries({ queryKey: ['provider_chat_thread', providerId, requestId] });
+                    queryClient.invalidateQueries({ queryKey: threadQueryKey });
                     queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
 
-                    // Se a tela estiver focada e a mensagem recebida for do interlocutor, marca como lida
-                    if (isFocused && payload.eventType === 'INSERT' && payload.new?.sender_id !== providerId) {
-                        markProviderChatThreadAsRead(requestId).catch(() => {});
+                    // Se a thread estiver visivelmente ativa e o interlocutor enviou mensagem nova, marca leitura
+                    if (
+                        payload.eventType === 'INSERT' &&
+                        payload.new?.sender_id !== providerId &&
+                        isThreadVisiblyActiveRef.current
+                    ) {
+                        triggerMarkRead();
                     }
                 }
             )
             .subscribe();
 
         const requestChannel = supabase
-            .channel(`provider_chat_thread_request_${requestId}`)
+            .channel(`provider_chat_thread_request_${requestId}_${channelIdRef.current}`)
             .on(
                 'postgres_changes',
                 {
@@ -115,7 +133,7 @@ export function useProviderChatThread(requestId?: string) {
                     filter: `id=eq.${requestId}`,
                 },
                 () => {
-                    queryClient.invalidateQueries({ queryKey: ['provider_chat_thread', providerId, requestId] });
+                    queryClient.invalidateQueries({ queryKey: threadQueryKey });
                     queryClient.invalidateQueries({ queryKey: ['provider_chat_inbox', providerId] });
                 }
             )
@@ -125,7 +143,7 @@ export function useProviderChatThread(requestId?: string) {
             supabase.removeChannel(chatChannel);
             supabase.removeChannel(requestChannel);
         };
-    }, [providerId, queryClient, requestId, isFocused]);
+    }, [providerId, queryClient, requestId, threadQueryKey, triggerMarkRead]);
 
     return {
         thread: query.data?.thread || null,

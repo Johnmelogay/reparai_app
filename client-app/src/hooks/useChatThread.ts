@@ -1,11 +1,12 @@
 import { useAuth } from '@/context/AuthContext';
+import { useAppVisibility } from '@/hooks/useAppVisibility';
 import { fetchChatThread, markChatThreadAsRead, sendChatMessage } from '@/services/chatService';
 import { supabase } from '@/services/supabase';
 import { toErrorMessage } from '@/utils/error';
 import { useIsFocused } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 interface SendMessageVariables {
   requestId: string;
@@ -16,9 +17,17 @@ interface SendMessageVariables {
 export function useChatThread(requestId?: string) {
   const { user } = useAuth();
   const isFocused = useIsFocused();
+  const isAppVisible = useAppVisibility();
   const queryClient = useQueryClient();
   const isMarkingReadRef = useRef(false);
-  const queryKey = ['chat_thread', user?.id, requestId];
+  const channelIdRef = useRef(Math.random().toString(36).substring(2, 9));
+  const queryKey = useMemo(() => ['chat_thread', user?.id, requestId], [user?.id, requestId]);
+
+  const isThreadVisiblyActive = isFocused && isAppVisible;
+  const isThreadVisiblyActiveRef = useRef(isThreadVisiblyActive);
+  useEffect(() => {
+    isThreadVisiblyActiveRef.current = isThreadVisiblyActive;
+  }, [isThreadVisiblyActive]);
 
   const query = useQuery({
     queryKey,
@@ -41,46 +50,51 @@ export function useChatThread(requestId?: string) {
     },
   });
 
-  // Marcação de leitura acionada quando a tela está em foco e há mensagens não lidas
+  // Função segura e coalescida para marcar mensagens da thread como lidas
+  const triggerMarkRead = useCallback(async () => {
+    if (!user || !requestId || !isThreadVisiblyActiveRef.current || isMarkingReadRef.current) return;
+
+    isMarkingReadRef.current = true;
+    try {
+      const updatedCount = await markChatThreadAsRead(requestId);
+      if (updatedCount > 0) {
+        queryClient.invalidateQueries({ queryKey });
+        queryClient.invalidateQueries({ queryKey: ['chat_inbox', user?.id] });
+        queryClient.invalidateQueries({ queryKey: ['notifications', user?.id] });
+      }
+    } catch {
+      // Falhas parciais não quebram o fluxo da UI
+    } finally {
+      isMarkingReadRef.current = false;
+    }
+  }, [user, requestId, queryClient, queryKey]);
+
+  // Marcação de leitura ao focar/tornar visível a thread com mensagens não lidas
   useEffect(() => {
-    if (!user || !requestId || !isFocused || isMarkingReadRef.current) return;
+    if (!isThreadVisiblyActive || !requestId || !user) return;
 
     const hasUnreadIncoming = query.data?.messages?.some(
       (m) => m.direction === 'incoming' && !m.readAt
     );
 
     if (hasUnreadIncoming) {
-      isMarkingReadRef.current = true;
-      markChatThreadAsRead(requestId)
-        .then((updatedCount) => {
-          if (updatedCount > 0) {
-            queryClient.invalidateQueries({ queryKey });
-            queryClient.invalidateQueries({ queryKey: ['chat_inbox', user?.id] });
-            queryClient.invalidateQueries({ queryKey: ['notifications', user?.id] });
-          }
-        })
-        .catch(() => {
-          // Falhas silenciosas de mark-read não devem travar a experiência do usuário
-        })
-        .finally(() => {
-          isMarkingReadRef.current = false;
-        });
+      triggerMarkRead();
     }
-  }, [user?.id, requestId, isFocused, query.data?.messages, queryClient]);
+  }, [isThreadVisiblyActive, requestId, user, query.data?.messages, triggerMarkRead]);
 
-  // Refetch garantido ao recuperar foco na tela
+  // Refetch garantido ao transicionar para visivelmente ativo
   useEffect(() => {
-    if (isFocused && requestId && user) {
+    if (isThreadVisiblyActive && requestId && user) {
       query.refetch();
     }
-  }, [isFocused, requestId, user]);
+  }, [isThreadVisiblyActive, requestId, user]);
 
   // Subscription Realtime na tabela canônica chat_messages e requests
   useEffect(() => {
     if (!user || !requestId) return;
 
     const chatChannel = supabase
-      .channel(`chat_thread_messages_${requestId}`)
+      .channel(`chat_thread_messages_${requestId}_${channelIdRef.current}`)
       .on(
         'postgres_changes',
         {
@@ -94,16 +108,20 @@ export function useChatThread(requestId?: string) {
           queryClient.invalidateQueries({ queryKey: ['chat_inbox', user?.id] });
           queryClient.invalidateQueries({ queryKey: ['notifications', user?.id] });
 
-          // Se a tela estiver focada e a mensagem recebida for do interlocutor, marca como lida
-          if (isFocused && payload.eventType === 'INSERT' && payload.new?.sender_id !== user.id) {
-            markChatThreadAsRead(requestId).catch(() => {});
+          // Se a thread estiver visivelmente ativa e o interlocutor enviou mensagem nova, marca leitura
+          if (
+            payload.eventType === 'INSERT' &&
+            payload.new?.sender_id !== user.id &&
+            isThreadVisiblyActiveRef.current
+          ) {
+            triggerMarkRead();
           }
         }
       )
       .subscribe();
 
     const requestChannel = supabase
-      .channel(`chat_thread_request_${requestId}`)
+      .channel(`chat_thread_request_${requestId}_${channelIdRef.current}`)
       .on(
         'postgres_changes',
         {
@@ -123,7 +141,7 @@ export function useChatThread(requestId?: string) {
       supabase.removeChannel(chatChannel);
       supabase.removeChannel(requestChannel);
     };
-  }, [user?.id, requestId, isFocused, queryClient]);
+  }, [user?.id, requestId, queryClient, queryKey, triggerMarkRead]);
 
   return {
     thread: query.data?.thread || null,
