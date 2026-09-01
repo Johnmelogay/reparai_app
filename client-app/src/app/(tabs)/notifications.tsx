@@ -86,13 +86,17 @@ export default function NotificationsScreen() {
             markAsRead(item.id);
         }
         if (item.related_id) {
-            router.push(`/ticket/${item.related_id}` as any);
+            if (item.type === 'offer') {
+                router.push({ pathname: '/request/new/match', params: { requestId: item.related_id } } as any);
+            } else {
+                router.push(`/ticket/${item.related_id}` as any);
+            }
         }
     };
 
     const handleOpenTicket = (ticketId: string, status: string) => {
         if (status === 'finding' || status === 'offered') {
-            router.push('/request/new/match' as any);
+            router.push({ pathname: '/request/new/match', params: { requestId: ticketId } } as any);
         } else {
             router.push(`/ticket/${ticketId}` as any);
         }

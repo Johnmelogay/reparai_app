@@ -268,6 +268,34 @@ export default function TicketDetailScreen() {
         }
     }, [ticket, provider, ratingValue, ratingComment, ratingLoading, router]);
 
+    const handleCancelTicket = useCallback(() => {
+        if (!ticket?.id) return;
+        Alert.alert(
+            'Cancelar pedido?',
+            'Tem certeza que deseja cancelar sua solicitação de serviço?',
+            [
+                { text: 'Voltar', style: 'cancel' },
+                {
+                    text: 'Sim, cancelar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const { error } = await supabase.rpc('client_cancel_request', {
+                                p_request_id: ticket.id,
+                                p_reason: 'Cancelado na tela de detalhes do pedido',
+                            });
+                            if (error) throw error;
+                            Alert.alert('Pedido cancelado', 'Sua solicitação foi cancelada.');
+                            router.replace('/(tabs)/requests');
+                        } catch (e: any) {
+                            Alert.alert('Erro ao cancelar', e?.message || 'Não foi possível cancelar o pedido.');
+                        }
+                    },
+                },
+            ]
+        );
+    }, [ticket?.id, router]);
+
     // Gradient: faded at client end → solid green at provider end (conveys direction of travel)
     const routeGradientColors = useMemo(() => {
         if (routeCoords.length < 2) return [];
@@ -768,6 +796,34 @@ export default function TicketDetailScreen() {
                         </Text>
                     </View>
                 </View>
+
+                {/* Search Phase Action Card */}
+                {(ticket.status === 'finding' || ticket.status === 'offered') && (
+                    <Card style={styles.infoCard}>
+                        <View style={{ paddingVertical: 4 }}>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 }}>
+                                {ticket.status === 'offered' ? 'Propostas disponíveis!' : 'Buscando profissionais...'}
+                            </Text>
+                            <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 14, lineHeight: 20 }}>
+                                {ticket.status === 'offered'
+                                    ? 'Prestadores enviaram propostas para o seu atendimento. Abra a tela de ofertas para escolher.'
+                                    : 'A busca está ativa no sistema. Você pode acompanhar as ofertas em tempo real ou cancelar o pedido.'}
+                            </Text>
+                            <Button
+                                title={ticket.status === 'offered' ? 'Ver Ofertas' : 'Acompanhar Busca'}
+                                onPress={() => router.push({ pathname: '/request/new/match', params: { requestId: ticket.id } } as any)}
+                                style={{ marginBottom: 8 }}
+                            />
+                            <TouchableOpacity
+                                style={{ paddingVertical: 8, alignItems: 'center' }}
+                                onPress={handleCancelTicket}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={{ color: '#EF4444', fontWeight: '600', fontSize: 14 }}>Cancelar pedido</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Card>
+                )}
 
                 {/* Provider Section */}
                 {showProviderCard && provider && (

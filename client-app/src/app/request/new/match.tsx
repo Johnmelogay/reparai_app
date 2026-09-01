@@ -16,10 +16,11 @@ import { usePartners } from '@/hooks/usePartners';
 import { QUESTION_SETS } from '@/services/questionsData';
 import { supabase } from '@/services/supabase';
 import { Provider } from '@/types';
-import { useRouter } from 'expo-router';
-import { CheckCircle, Expand, MapPin, MapPinOff, MessageCircle, RefreshCw, Search, XCircle } from 'lucide-react-native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { CheckCircle, Clock, Expand, MapPin, MapPinOff, MessageCircle, RefreshCw, Search, X, XCircle } from 'lucide-react-native';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Easing, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, BackHandler, Dimensions, Easing, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { parseGeoPoint } from '@/utils/geo';
 
@@ -53,6 +54,11 @@ const getStatusGuidance = (status: string, providerName?: string): string => {
 
 export default function RequestMatchScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
+    const insets = useSafeAreaInsets();
+    const params = useLocalSearchParams<{ requestId?: string; id?: string }>();
+    const routeRequestId = params.requestId || params.id;
+
     // Using global request state
     const {
         status,
@@ -65,7 +71,13 @@ export default function RequestMatchScreen() {
         funnelAnswers,
         aiResult,
         resetFunnel,
+        cancelRequest,
+        keepRequestOpenInBackground,
+        loadTicket,
     } = useRequest();
+
+    const [showExitModal, setShowExitModal] = useState(false);
+    const isExitingRef = useRef(false);
 
     const [searchRadiusKm, setSearchRadiusKm] = useState(INITIAL_RADIUS_KM);
     const { providers } = usePartners(searchRadiusKm * 1000);
@@ -231,6 +243,59 @@ export default function RequestMatchScreen() {
         const timer = setTimeout(getRoute, 500);
         return () => clearTimeout(timer);
     }, [currentTicket?.coordinates?.latitude, currentTicket?.coordinates?.longitude, providerLiveLocation]);
+
+    // Hydration when routeRequestId is passed (from orders tab or notification)
+    useEffect(() => {
+        if (!routeRequestId) return;
+        if (currentTicket?.id === routeRequestId) {
+            const curStatus = (currentTicket.status || '').toLowerCase();
+            if (['canceled', 'cancelled', 'declined', 'expired'].includes(curStatus)) {
+                router.replace(`/ticket/${routeRequestId}` as any);
+            }
+            return;
+        }
+
+        let isMounted = true;
+        const hydrateTicket = async () => {
+            try {
+                const data = await loadTicket(routeRequestId);
+                if (!isMounted || !data) return;
+                const normalized = (data.status || '').toLowerCase();
+                if (['canceled', 'cancelled', 'declined', 'expired'].includes(normalized)) {
+                    router.replace(`/ticket/${routeRequestId}` as any);
+                }
+            } catch (err) {
+                console.error('Failed to load request into match screen:', err);
+            }
+        };
+        hydrateTicket();
+        return () => { isMounted = false; };
+    }, [routeRequestId, currentTicket?.id, currentTicket?.status, loadTicket, router]);
+
+    // Intercept back / swipe during search
+    useEffect(() => {
+        const onBackPress = () => {
+            if ((status === 'finding' || status === 'offered') && !isExitingRef.current) {
+                setShowExitModal(true);
+                return true;
+            }
+            return false;
+        };
+
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+        const unsubBeforeRemove = navigation.addListener('beforeRemove', (e) => {
+            if ((status === 'finding' || status === 'offered') && !isExitingRef.current) {
+                e.preventDefault();
+                setShowExitModal(true);
+            }
+        });
+
+        return () => {
+            backHandler.remove();
+            unsubBeforeRemove();
+        };
+    }, [navigation, status]);
 
     // Search timeout fallback
     const [searchTimedOut, setSearchTimedOut] = useState(false);
@@ -442,26 +507,65 @@ export default function RequestMatchScreen() {
         }
     }, [status, assignedProvider, offerCandidates.length, cardSlideAnim]);
 
-    // Handle Declined/Cancelled State
+    // Handle Declined/Cancelled/Expired State
     useEffect(() => {
-        if (status === 'canceled') {
+        if (status === 'canceled' || status === 'expired') {
             Alert.alert(
                 'Solicitação Encerrada',
-                'Não conseguimos encontrar um profissional disponível ou a solicitação foi cancelada.',
+                status === 'expired'
+                    ? 'O prazo desta solicitação expirou.'
+                    : 'Não conseguimos encontrar um profissional disponível ou a solicitação foi cancelada.',
                 [
                     {
-                        text: 'Tentar Novamente',
-                        onPress: () => router.back() // Go back to details to resubmit
-                    },
-                    {
                         text: 'Ir para Início',
-                        style: 'cancel',
-                        onPress: () => router.push('/(tabs)/home')
+                        onPress: () => router.replace('/(tabs)/home')
                     }
                 ]
             );
         }
-    }, [status]);
+    }, [status, router]);
+
+    const handleKeepOpenInBackground = async () => {
+        if (!currentTicket?.id) {
+            setShowExitModal(false);
+            router.replace('/(tabs)/home');
+            return;
+        }
+
+        const success = await keepRequestOpenInBackground(currentTicket.id);
+        if (success) {
+            isExitingRef.current = true;
+            setShowExitModal(false);
+            router.replace('/(tabs)/home');
+        }
+    };
+
+    const handleContinueWaiting = () => {
+        setShowExitModal(false);
+    };
+
+    const handleCancelRequestPrompt = () => {
+        Alert.alert(
+            'Cancelar pedido?',
+            'Tem certeza que deseja cancelar sua solicitação? Os prestadores não poderão mais enviar propostas.',
+            [
+                { text: 'Voltar', style: 'cancel' },
+                {
+                    text: 'Sim, cancelar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        const success = await cancelRequest('Cancelado pelo cliente na tela de busca');
+                        if (success) {
+                            isExitingRef.current = true;
+                            setShowExitModal(false);
+                            resetFunnel();
+                            router.replace('/(tabs)/home');
+                        }
+                    }
+                }
+            ]
+        );
+    };
 
     const handleOpenChat = () => {
         if (currentTicket?.id) {
@@ -482,6 +586,10 @@ export default function RequestMatchScreen() {
     };
 
     const handleGoHome = () => {
+        if (status === 'finding' || status === 'offered') {
+            setShowExitModal(true);
+            return;
+        }
         resetFunnel();
         setStatus('idle');
         setAssignedProvider(null);
@@ -761,7 +869,7 @@ export default function RequestMatchScreen() {
                                 style={styles.timeoutOption}
                                 activeOpacity={0.7}
                                 onPress={() => {
-                                    router.push('/(tabs)/search');
+                                    setShowExitModal(true);
                                 }}
                             >
                                 <View style={[styles.timeoutOptionIcon, { backgroundColor: '#FFF7ED' }]}>
@@ -769,7 +877,7 @@ export default function RequestMatchScreen() {
                                 </View>
                                 <View style={styles.timeoutOptionInfo}>
                                     <Text style={styles.timeoutOptionTitle}>Ninguém por perto</Text>
-                                    <Text style={styles.timeoutOptionDesc}>Buscar manualmente em outra região</Text>
+                                    <Text style={styles.timeoutOptionDesc}>Opções para sair ou manter a busca</Text>
                                 </View>
                             </TouchableOpacity>
 
@@ -777,7 +885,7 @@ export default function RequestMatchScreen() {
                                 style={styles.timeoutOption}
                                 activeOpacity={0.7}
                                 onPress={() => {
-                                    router.push('/(tabs)/home');
+                                    setShowExitModal(true);
                                 }}
                             >
                                 <View style={[styles.timeoutOptionIcon, { backgroundColor: '#FEF2F2' }]}>
@@ -785,7 +893,7 @@ export default function RequestMatchScreen() {
                                 </View>
                                 <View style={styles.timeoutOptionInfo}>
                                     <Text style={styles.timeoutOptionTitle}>Região sem cobertura</Text>
-                                    <Text style={styles.timeoutOptionDesc}>Voltar ao início e tentar mais tarde</Text>
+                                    <Text style={styles.timeoutOptionDesc}>Opções para sair ou manter a busca</Text>
                                 </View>
                             </TouchableOpacity>
                         </View>
@@ -937,6 +1045,76 @@ export default function RequestMatchScreen() {
                     )}
                 </Animated.View>
             )}
+
+            {/* Top Bar Close Button (during search / offered) */}
+            {(status === 'finding' || status === 'offered') && (
+                <View style={[styles.topHeaderBar, { top: insets.top > 0 ? insets.top + 8 : 16 }]} pointerEvents="box-none">
+                    <TouchableOpacity
+                        style={styles.headerRoundButton}
+                        onPress={() => setShowExitModal(true)}
+                        activeOpacity={0.8}
+                        accessibilityLabel="Opções de saída da busca"
+                    >
+                        <X size={20} color="#1F2937" />
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {/* Explicit Exit Action Sheet Modal */}
+            <Modal
+                visible={showExitModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowExitModal(false)}
+            >
+                <Pressable
+                    style={styles.modalOverlay}
+                    onPress={() => setShowExitModal(false)}
+                >
+                    <Pressable style={styles.exitModalCard} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.exitModalHandle} />
+                        <Text style={styles.exitModalTitle}>Deseja sair da busca?</Text>
+                        <Text style={styles.exitModalSubtitle}>
+                            Sua solicitação está ativa e visível para os profissionais próximos.
+                        </Text>
+
+                        {/* Option 1: Keep in background (Primary) */}
+                        <TouchableOpacity
+                            style={styles.exitOptionPrimary}
+                            onPress={handleKeepOpenInBackground}
+                            activeOpacity={0.85}
+                        >
+                            <View style={styles.exitOptionIconWrap}>
+                                <Clock size={20} color="#fff" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.exitOptionPrimaryTitle}>Avisar-me quando houver interessados</Text>
+                                <Text style={styles.exitOptionPrimarySub}>
+                                    Mantém a busca ativa em segundo plano por até 48h. Você será notificado assim que receber propostas.
+                                </Text>
+                            </View>
+                        </TouchableOpacity>
+
+                        {/* Option 2: Continue waiting */}
+                        <TouchableOpacity
+                            style={styles.exitOptionSecondary}
+                            onPress={handleContinueWaiting}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.exitOptionSecondaryText}>Continuar aguardando na tela</Text>
+                        </TouchableOpacity>
+
+                        {/* Option 3: Cancel (Destructive) */}
+                        <TouchableOpacity
+                            style={styles.exitOptionDanger}
+                            onPress={handleCancelRequestPrompt}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.exitOptionDangerText}>Cancelar pedido</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
         </View>
     );
 }
@@ -1508,5 +1686,107 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#9CA3AF',
         lineHeight: 16,
+    },
+    topHeaderBar: {
+        position: 'absolute',
+        left: 16,
+        zIndex: 1100,
+    },
+    headerRoundButton: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        backgroundColor: '#FFFFFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 4,
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+        justifyContent: 'flex-end',
+    },
+    exitModalCard: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingHorizontal: 20,
+        paddingTop: 12,
+        paddingBottom: Platform.OS === 'ios' ? 40 : 28,
+    },
+    exitModalHandle: {
+        width: 40,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#E5E7EB',
+        alignSelf: 'center',
+        marginBottom: 16,
+    },
+    exitModalTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 6,
+    },
+    exitModalSubtitle: {
+        fontSize: 14,
+        color: '#6B7280',
+        lineHeight: 20,
+        marginBottom: 20,
+    },
+    exitOptionPrimary: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F0FDF4',
+        borderWidth: 1.5,
+        borderColor: '#86EFAC',
+        borderRadius: 14,
+        padding: 16,
+        marginBottom: 12,
+    },
+    exitOptionIconWrap: {
+        width: 38,
+        height: 38,
+        borderRadius: 19,
+        backgroundColor: '#16A34A',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 14,
+    },
+    exitOptionPrimaryTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#166534',
+        marginBottom: 3,
+    },
+    exitOptionPrimarySub: {
+        fontSize: 12,
+        color: '#15803D',
+        lineHeight: 16,
+    },
+    exitOptionSecondary: {
+        backgroundColor: '#F3F4F6',
+        borderRadius: 14,
+        paddingVertical: 14,
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    exitOptionSecondaryText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#374151',
+    },
+    exitOptionDanger: {
+        paddingVertical: 12,
+        alignItems: 'center',
+    },
+    exitOptionDangerText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#EF4444',
     },
 });

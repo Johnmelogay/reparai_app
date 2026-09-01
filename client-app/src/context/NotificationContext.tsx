@@ -78,6 +78,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 if (data?.requestId) {
                     if (data.type === 'message') {
                         router.push(`/chat/${data.requestId}` as any);
+                    } else if (data.type === 'offer') {
+                        router.push({ pathname: '/request/new/match', params: { requestId: data.requestId } } as any);
                     } else {
                         router.push(`/ticket/${data.requestId}` as any);
                     }
@@ -221,6 +223,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         dismissBanner();
         if (banner.type === 'message' && banner.relatedId) {
             router.push(`/chat/${banner.relatedId}` as any);
+        } else if (banner.type === 'offer' && banner.relatedId) {
+            router.push({ pathname: '/request/new/match', params: { requestId: banner.relatedId } } as any);
         } else if (banner.relatedId) {
             router.push(`/ticket/${banner.relatedId}` as any);
         }

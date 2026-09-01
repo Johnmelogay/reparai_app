@@ -52,7 +52,8 @@ interface RequestContextType extends RequestState {
     setFinalConfidence: (confidence: number) => void;
     resetFunnel: () => void;
     submitRequest: () => Promise<string>;
-    cancelRequest: () => void;
+    cancelRequest: (reason?: string) => Promise<boolean>;
+    keepRequestOpenInBackground: (ticketId?: string) => Promise<boolean>;
     completeRequest: () => void;
     // Funções de simulação/manual ainda úteis
     setStatus: (status: TicketStatus | 'idle' | 'drafting') => void;
@@ -64,7 +65,7 @@ interface RequestContextType extends RequestState {
     // Testing/Simulation helpers
     setProviderLocation: (loc: { latitude: number; longitude: number } | null) => void;
     setEta: (eta: number | null) => void;
-    loadTicket: (ticketId: string) => Promise<void>;
+    loadTicket: (ticketId: string) => Promise<any>;
 }
 
 const RequestContext = createContext<RequestContextType | undefined>(undefined);
@@ -330,8 +331,10 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
                     });
                 }
             }
+            return data;
         } catch (e) {
             console.error('Error loading ticket into context:', e);
+            throw e;
         }
     }, [subscribeToOrder]);
 
@@ -620,7 +623,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         }
     }, [currentTicket, locationContext?.selectedLocation, category, description, funnelAnswers, track, subscribeToOrder]);
 
-    const cancelRequest = useCallback(async (reason?: string) => {
+    const cancelRequest = useCallback(async (reason?: string): Promise<boolean> => {
         // Cancel on the database if we have a real ticket
         if (currentTicket?.id) {
             try {
@@ -635,7 +638,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
             } catch (e: any) {
                 logger.error('Failed to cancel request on Supabase', e);
                 Alert.alert('Não foi possível cancelar', e?.message || 'O pedido não pode ser cancelado no estado atual.');
-                return;
+                return false;
             }
         }
 
@@ -654,7 +657,41 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         setTrack(null);
         setOffers([]);
         saveDraft(null);
+        return true;
     }, [currentTicket, orderChannel]);
+
+    const keepRequestOpenInBackground = useCallback(async (ticketId?: string): Promise<boolean> => {
+        const targetId = ticketId || currentTicket?.id;
+        if (!targetId) {
+            Alert.alert('Erro', 'Pedido não identificado.');
+            return false;
+        }
+
+        try {
+            const { data, error } = await supabase.rpc('client_keep_request_open_v1', {
+                p_request_id: targetId,
+            });
+            if (error) throw error;
+
+            if (data) {
+                const updatedStatus = normalizeStatus(data.status);
+                setCurrentTicket(prev => {
+                    const updated: Partial<Ticket> = {
+                        ...prev,
+                        id: data.id,
+                        status: updatedStatus as TicketStatus,
+                    };
+                    saveDraft(updated);
+                    return updated;
+                });
+            }
+            return true;
+        } catch (e: any) {
+            logger.error('Failed to keep request open via RPC', e);
+            Alert.alert('Erro', e?.message || 'Não foi possível manter a busca em segundo plano.');
+            return false;
+        }
+    }, [currentTicket?.id]);
 
     const completeRequest = useCallback(() => {
         setStatus('done');
@@ -683,6 +720,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         setAddress,
         submitRequest,
         cancelRequest,
+        keepRequestOpenInBackground,
         completeRequest,
         setStatus,
         setAssignedProvider,
@@ -717,6 +755,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
         setAddress,
         submitRequest,
         cancelRequest,
+        keepRequestOpenInBackground,
         completeRequest,
         setStatus,
         setAssignedProvider,

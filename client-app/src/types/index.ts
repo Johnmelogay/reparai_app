@@ -319,7 +319,7 @@ export interface PaymentMethod {
 }
 
 // ===== NOTIFICATION SYSTEM =====
-export type NotificationType = 'request' | 'message' | 'system' | 'partner';
+export type NotificationType = 'request' | 'message' | 'system' | 'partner' | 'offer';
 
 export interface Notification {
     id: string;

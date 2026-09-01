@@ -11,12 +11,13 @@ import { ServiceCard, ServiceStatus } from '@/components/ui/ServiceCard';
 import { Colors, Layout } from '@/constants/Colors';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthBottomSheet } from '@/components/modals/AuthBottomSheet';
 import { useAuth } from '@/context/AuthContext';
 import { MyRequest, useMyRequests } from '@/hooks/useMyRequests';
+import { supabase } from '@/services/supabase';
 import { ClipboardList } from 'lucide-react-native';
 
 // Map Supabase status → ServiceCard status
@@ -74,8 +75,35 @@ export default function RequestsScreen() {
 
     const filteredData = filter === 'Active' ? activeRequests : filter === 'Done' ? doneRequests : canceledRequests;
 
+    const handleCancelRequestFromList = (requestId: string) => {
+        Alert.alert(
+            'Cancelar pedido?',
+            'Deseja realmente cancelar este pedido? As propostas de prestadores serão canceladas.',
+            [
+                { text: 'Voltar', style: 'cancel' },
+                {
+                    text: 'Sim, cancelar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const { error } = await supabase.rpc('client_cancel_request', {
+                                p_request_id: requestId,
+                                p_reason: 'Cancelado pelo cliente na lista de pedidos',
+                            });
+                            if (error) throw error;
+                            await refetch();
+                        } catch (e: any) {
+                            Alert.alert('Erro ao cancelar', e?.message || 'Não foi possível cancelar o pedido.');
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const renderItem = ({ item }: { item: MyRequest }) => {
         const status = mapStatus(item.status);
+        const isSearchPhase = item.status === 'finding' || item.status === 'offered';
         const price = item.displacement_fee
             ? `R$ ${Number(item.displacement_fee).toFixed(2).replace('.', ',')}`
             : 'Sob consulta';
@@ -95,29 +123,54 @@ export default function RequestsScreen() {
             || 'Serviço solicitado';
 
         return (
-            <ServiceCard
-                orderIdShort={item.id.substring(0, 4).toUpperCase()}
-                status={status}
-                title={title}
-                category={item.category || 'Geral'}
-                providerName={item.provider_name || 'Buscando profissional...'}
-                providerRating={item.provider_rating || undefined}
-                providerVerified={!!item.provider_id}
-                providerImage={item.provider_avatar || undefined}
-                dateTime={dateStr}
-                locationLabel={locationLabel}
-                priceLabel={price}
-                onPress={() => {
-                    router.push(`/ticket/${item.id}`);
-                }}
-                onPrimaryAction={() => { }}
-                onChatPress={() => {
-                    if (item.provider_id) {
-                        router.push(`/chat/${item.id}`);
-                    }
-                }}
-                style={{ marginBottom: Layout.spacing.lg }}
-            />
+            <View style={{ marginBottom: Layout.spacing.lg }}>
+                <ServiceCard
+                    orderIdShort={item.id.substring(0, 4).toUpperCase()}
+                    status={status}
+                    title={title}
+                    category={item.category || 'Geral'}
+                    providerName={item.provider_name || (item.status === 'offered' ? 'Propostas disponíveis' : 'Buscando profissional...')}
+                    providerRating={item.provider_rating || undefined}
+                    providerVerified={!!item.provider_id}
+                    providerImage={item.provider_avatar || undefined}
+                    dateTime={dateStr}
+                    locationLabel={locationLabel}
+                    priceLabel={price}
+                    onPress={() => {
+                        if (isSearchPhase) {
+                            router.push({ pathname: '/request/new/match', params: { requestId: item.id } } as any);
+                        } else {
+                            router.push(`/ticket/${item.id}`);
+                        }
+                    }}
+                    onPrimaryAction={() => { }}
+                    onChatPress={() => {
+                        if (item.provider_id) {
+                            router.push(`/chat/${item.id}`);
+                        }
+                    }}
+                />
+                {isSearchPhase && (
+                    <View style={styles.orderActionsRow}>
+                        <TouchableOpacity
+                            style={styles.orderActionBtnPrimary}
+                            onPress={() => router.push({ pathname: '/request/new/match', params: { requestId: item.id } } as any)}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.orderActionBtnPrimaryText}>
+                                {item.status === 'offered' ? 'Ver ofertas' : 'Ver busca'}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.orderActionBtnCancel}
+                            onPress={() => handleCancelRequestFromList(item.id)}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.orderActionBtnCancelText}>Cancelar pedido</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+            </View>
         );
     };
 
@@ -340,5 +393,39 @@ const styles = StyleSheet.create({
         marginTop: 12,
         fontSize: 14,
         color: '#999',
+    },
+    orderActionsRow: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 8,
+        paddingHorizontal: 4,
+    },
+    orderActionBtnPrimary: {
+        flex: 1,
+        backgroundColor: Colors.light.primary,
+        paddingVertical: 10,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    orderActionBtnPrimaryText: {
+        color: '#fff',
+        fontWeight: '700',
+        fontSize: 13,
+    },
+    orderActionBtnCancel: {
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#FCA5A5',
+        backgroundColor: '#FEF2F2',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    orderActionBtnCancelText: {
+        color: '#DC2626',
+        fontWeight: '600',
+        fontSize: 13,
     },
 });

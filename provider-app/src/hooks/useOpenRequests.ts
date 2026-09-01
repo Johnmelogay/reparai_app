@@ -9,6 +9,7 @@ import { OpenRequest } from '@/types';
 import { toErrorMessage } from '@/utils/error';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { AppState, Platform } from 'react-native';
 
 async function fetchOpenRequests(): Promise<OpenRequest[]> {
     const { data, error } = await supabase.rpc('get_provider_open_requests', {
@@ -39,14 +40,17 @@ export function useOpenRequests() {
         queryKey,
         queryFn: fetchOpenRequests,
         enabled: !!userId,
-        staleTime: 60 * 1000,
+        staleTime: 30 * 1000,
     });
 
-    // Realtime: listen for new requests being inserted with status 'finding'
+    // Realtime: listen for requests and provider_offers events
     useEffect(() => {
         if (!userId) return;
 
-        const invalidate = () => queryClient.invalidateQueries({ queryKey: ['open_requests', userId] });
+        const invalidateAndRefetch = () => {
+            queryClient.invalidateQueries({ queryKey: ['open_requests', userId] });
+            refetch();
+        };
 
         const channel = supabase
             .channel(`open_requests_realtime_${userId}`)
@@ -58,7 +62,7 @@ export function useOpenRequests() {
                     table: 'requests',
                 },
                 () => {
-                    invalidate();
+                    invalidateAndRefetch();
                 }
             )
             .on(
@@ -69,15 +73,44 @@ export function useOpenRequests() {
                     table: 'provider_offers',
                 },
                 () => {
-                    invalidate();
+                    invalidateAndRefetch();
                 }
             )
-            .subscribe();
+            .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    // Reconcile any events missed while subscribing
+                    refetch();
+                }
+            });
 
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [queryClient, userId]);
+    }, [queryClient, userId, refetch]);
+
+    // AppState focus refetch (native)
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                refetch();
+            }
+        });
+        return () => sub.remove();
+    }, [refetch]);
+
+    // Web document visibility change refetch
+    useEffect(() => {
+        if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                refetch();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [refetch]);
 
     return {
         requests,

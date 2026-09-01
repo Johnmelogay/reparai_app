@@ -11,7 +11,7 @@ import { OpenRequest } from '@/types';
 import { categoryLabel } from '@/utils/category';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
     AlertCircle,
     ChevronRight,
@@ -403,6 +403,12 @@ export default function JobsScreen() {
         openOfferModal(matched);
     }, [isOnline, loading, offerRequestIdParam, openOfferModal, requests]);
 
+    useFocusEffect(
+        useCallback(() => {
+            refetch();
+        }, [refetch])
+    );
+
     const handleAcceptRequest = useCallback(async (request: OpenRequest, draft: OfferDraft): Promise<boolean> => {
         try {
             setSubmittingRequestId(request.id);
@@ -421,7 +427,16 @@ export default function JobsScreen() {
             await refetch();
             return true;
         } catch (error: any) {
-            Alert.alert('Erro ao enviar oferta', error?.message || 'Não foi possível enviar sua proposta.');
+            const errorMsg = String(error?.message || '');
+            if (errorMsg.includes('request_unavailable') || errorMsg.includes('outside_dispatch_radius')) {
+                Alert.alert('Pedido indisponível', 'Este pedido não está mais disponível.');
+                setOfferModalVisible(false);
+                setSelectedOfferRequest(null);
+                setSelectedEta(null);
+            } else {
+                Alert.alert('Erro ao enviar oferta', error?.message || 'Não foi possível enviar sua proposta.');
+            }
+            await refetch();
             return false;
         } finally {
             setSubmittingRequestId(null);
