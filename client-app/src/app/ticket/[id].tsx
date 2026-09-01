@@ -18,7 +18,7 @@ import {
     Phone,
     Shield,
     Star,
-    Truck,
+    Navigation,
     Wrench,
     X
 } from 'lucide-react-native';
@@ -74,11 +74,11 @@ const STATUS_CONFIG: Record<TicketStatus, { label: string; icon: any; color: str
     answered: { label: 'Propostas Recebidas', icon: BadgeCheck, color: '#8B5CF6', bg: '#EDE9FE' },
     accepted: { label: 'Proposta Selecionada', icon: BadgeCheck, color: '#0284C7', bg: '#E0F2FE' },
     confirmed: { label: 'Pedido Confirmado', icon: BadgeCheck, color: Colors.light.success, bg: Colors.light.successBackground },
-    en_route: { label: 'A caminho do local', icon: Truck, color: Colors.light.primary, bg: '#FFF4E6' },
+    en_route: { label: 'A caminho do local', icon: Navigation, color: Colors.light.primary, bg: '#FFF4E6' },
     arrived: { label: 'Prestador no local', icon: MapPin, color: '#0284C7', bg: '#E0F2FE' },
     quote_provided: { label: 'Orçamento Enviado', icon: FileText, color: '#D97706', bg: '#FEF3C7' },
     quote_accepted: { label: 'Serviço em Andamento', icon: Wrench, color: '#10B981', bg: '#D1FAE5' },
-    done: { label: 'Finalizado', icon: CheckCircle, color: Colors.light.success, bg: Colors.light.successBackground },
+    done: { label: 'Serviço Concluído', icon: CheckCircle, color: Colors.light.success, bg: Colors.light.successBackground },
     declined: { label: 'Recusado', icon: X, color: '#6B7280', bg: '#F3F4F6' },
     canceled: { label: 'Cancelado', icon: X, color: '#EF4444', bg: '#FEE2E2' },
     expired: { label: 'Expirado', icon: Clock, color: '#9CA3AF', bg: '#F3F4F6' },
@@ -131,11 +131,17 @@ export default function TicketDetailScreen() {
 
     const { id, showSuccess } = useLocalSearchParams();
     const router = useRouter();
-    const { currentTicket, loadTicket } = useRequest();
+    const { currentTicket, loadTicket, eta: contextEta } = useRequest();
     const mapRef = useRef<MapView>(null);
 
     const [ticket, setTicket] = useState<TicketData | null>(null);
     const [provider, setProvider] = useState<ProviderData | null>(null);
+    const [estimatedTime, setEstimatedTime] = useState<number | null>(() => {
+        if (currentTicket?.id === id && typeof contextEta === 'number') {
+            return contextEta;
+        }
+        return null;
+    });
     const [loading, setLoading] = useState(true);
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
@@ -316,6 +322,22 @@ export default function TicketDetailScreen() {
                         location: parsedLocation || undefined
                     });
                 }
+            }
+
+            // Fetch accepted offer ETA if not already available
+            try {
+                const { data: offerData } = await supabase
+                    .from('provider_offers')
+                    .select('estimated_time')
+                    .eq('request_id', id as string)
+                    .eq('status', 'accepted')
+                    .maybeSingle();
+
+                if (offerData?.estimated_time != null) {
+                    setEstimatedTime(offerData.estimated_time);
+                }
+            } catch (offerErr) {
+                console.warn('[Ticket] Could not fetch accepted offer ETA:', offerErr);
             }
         } catch (err: any) {
             if (!silent) {
@@ -572,8 +594,15 @@ export default function TicketDetailScreen() {
         );
     }
 
-    const isActive = ['confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted'].includes(ticket.status);
-    const statusConfig = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.finding;
+    const showProviderCard = ['confirmed', 'en_route', 'arrived', 'quote_provided', 'quote_accepted', 'done'].includes(ticket.status);
+    const statusConfig = (ticket.status === 'quote_accepted' && ticket.done_provider_at)
+        ? {
+            label: 'Prestador finalizou',
+            icon: CheckCircle,
+            color: Colors.light.success,
+            bg: Colors.light.successBackground,
+        }
+        : (STATUS_CONFIG[ticket.status] || STATUS_CONFIG.finding);
     const StatusIcon = statusConfig.icon;
     const shortId = ticket.id.split('-')[0].toUpperCase();
 
@@ -709,7 +738,7 @@ export default function TicketDetailScreen() {
                 </View>
 
                 {/* Provider Section */}
-                {isActive && provider && (
+                {showProviderCard && provider && (
                     <Card style={styles.infoCard}>
                         <View style={styles.providerRowDetail}>
                             <View style={styles.providerImageWrapDetail}>
@@ -718,16 +747,69 @@ export default function TicketDetailScreen() {
                                     style={styles.providerImageDetail} 
                                 />
                                 <View style={styles.ratingBadgeDetail}>
-                                    <Text style={styles.ratingTextDetail}>★ {provider.rating?.toFixed(1) || '5.0'}</Text>
+                                    <Text style={styles.ratingTextDetail}>
+                                        ★ {provider.rating != null && provider.rating > 0 ? provider.rating.toFixed(1) : '—'}
+                                    </Text>
                                 </View>
                             </View>
                             
                             <View style={styles.providerInfoDetail}>
                                 <Text style={styles.providerNameDetail}>{provider.full_name}</Text>
-                                <View style={styles.etaRowDetail}>
-                                    <Clock size={14} color={Colors.light.primary} />
-                                    <Text style={styles.etaTextDetail}>Chega em ~15 min</Text>
-                                </View>
+                                {ticket.status === 'confirmed' && (
+                                    <View style={styles.etaRowDetail}>
+                                        <Clock size={14} color={Colors.light.primary} />
+                                        <Text style={styles.etaTextDetail}>
+                                            {estimatedTime != null ? `Previsão: ~${estimatedTime} min` : 'Previsão indisponível'}
+                                        </Text>
+                                    </View>
+                                )}
+                                {ticket.status === 'en_route' && (
+                                    <View style={styles.etaRowDetail}>
+                                        <Navigation size={14} color={Colors.light.primary} />
+                                        <Text style={styles.etaTextDetail}>
+                                            {estimatedTime != null ? `Chega em ~${estimatedTime} min` : 'Previsão indisponível'}
+                                        </Text>
+                                    </View>
+                                )}
+                                {ticket.status === 'arrived' && (
+                                    <View style={styles.etaRowDetail}>
+                                        <MapPin size={14} color="#0284C7" />
+                                        <Text style={[styles.etaTextDetail, { color: '#0284C7' }]}>Prestador no local</Text>
+                                    </View>
+                                )}
+                                {ticket.status === 'quote_provided' && (
+                                    <View style={styles.etaRowDetail}>
+                                        <FileText size={14} color="#D97706" />
+                                        <Text style={[styles.etaTextDetail, { color: '#D97706' }]}>Orçamento enviado</Text>
+                                    </View>
+                                )}
+                                {ticket.status === 'quote_accepted' && (
+                                    <View style={styles.etaRowDetail}>
+                                        {ticket.done_provider_at ? (
+                                            <>
+                                                <CheckCircle size={14} color={Colors.light.success} />
+                                                <Text style={[styles.etaTextDetail, { color: Colors.light.success }]}>
+                                                    Prestador finalizou — confirme a conclusão
+                                                </Text>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Wrench size={14} color="#10B981" />
+                                                <Text style={[styles.etaTextDetail, { color: '#10B981' }]}>
+                                                    Serviço em execução
+                                                </Text>
+                                            </>
+                                        )}
+                                    </View>
+                                )}
+                                {ticket.status === 'done' && (
+                                    <View style={styles.etaRowDetail}>
+                                        <CheckCircle size={14} color={Colors.light.success} />
+                                        <Text style={[styles.etaTextDetail, { color: Colors.light.success }]}>
+                                            Serviço concluído
+                                        </Text>
+                                    </View>
+                                )}
                             </View>
 
                             <TouchableOpacity 

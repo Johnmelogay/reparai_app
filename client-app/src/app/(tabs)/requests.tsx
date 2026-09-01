@@ -21,16 +21,31 @@ import { ClipboardList } from 'lucide-react-native';
 
 // Map Supabase status → ServiceCard status
 const mapStatus = (dbStatus: string): ServiceStatus => {
+    const s = (dbStatus || '').toLowerCase().trim();
     const map: Record<string, ServiceStatus> = {
+        open: 'ANALYSIS',
+        matching: 'ANALYSIS',
         finding: 'ANALYSIS',
+        draft: 'ANALYSIS',
+        offer_received: 'WAITING_BUDGET',
         offered: 'WAITING_BUDGET',
-        accepted: 'SCHEDULED',
-        paid: 'SCHEDULED',
-        en_route: 'en_route',
+        answered: 'WAITING_BUDGET',
+        accepted: 'CONFIRMED',
+        confirmed: 'CONFIRMED',
+        paid: 'CONFIRMED',
+        en_route: 'EN_ROUTE',
+        arrived: 'ARRIVED',
+        quote_provided: 'WAITING_BUDGET',
+        quote_accepted: 'IN_PROGRESS',
+        done: 'FINISHED',
         completed: 'FINISHED',
-        canceled: 'canceled',
+        cancelled: 'CANCELED',
+        canceled: 'CANCELED',
+        declined: 'CANCELED',
+        expired: 'CANCELED',
+        disputed: 'CANCELED',
     };
-    return map[dbStatus] || 'ANALYSIS';
+    return map[s] || 'ANALYSIS';
 };
 
 const formatDate = (dateString: string) => {

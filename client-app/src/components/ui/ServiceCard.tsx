@@ -15,8 +15,10 @@ import {
     Info,
     MapPin,
     MessageCircle,
+    Navigation,
     ShieldCheck,
     Star,
+    Wrench,
     XCircle
 } from 'lucide-react-native';
 import React from 'react';
@@ -26,8 +28,13 @@ export type ServiceStatus =
     | 'ANALYSIS'
     | 'WAITING_BUDGET'
     | 'SCHEDULED'
-    | 'en_route'
+    | 'CONFIRMED'
+    | 'EN_ROUTE'
+    | 'ARRIVED'
+    | 'IN_PROGRESS'
     | 'FINISHED'
+    | 'CANCELED'
+    | 'en_route'
     | 'canceled';
 
 interface ServiceCardProps {
@@ -36,7 +43,7 @@ interface ServiceCardProps {
     title: string;
     category: string;
     providerName: string;
-    providerRating?: number;
+    providerRating?: number | null;
     providerVerified?: boolean;
     providerImage?: string;
     dateTime: string;
@@ -55,17 +62,24 @@ interface ServiceCardProps {
 const getStatusConfig = (status: ServiceStatus) => {
     switch (status) {
         case 'ANALYSIS':
-            return { label: 'Em análise', color: '#F59E0B', bgColor: '#FEF3C7', icon: Clock };
+            return { label: 'Buscando profissionais', color: '#3B82F6', bgColor: '#DBEAFE', icon: Clock };
         case 'WAITING_BUDGET':
-            return { label: 'Aguardando orçamento', color: '#EA580C', bgColor: '#FFEDD5', icon: Clock };
+            return { label: 'Orçamento', color: '#D97706', bgColor: '#FEF3C7', icon: Clock };
         case 'SCHEDULED':
-            return { label: 'Agendado', color: '#6366F1', bgColor: '#EEF2FF', icon: Calendar };
+        case 'CONFIRMED':
+            return { label: 'Confirmado', color: '#0369A1', bgColor: '#E0F2FE', icon: Calendar };
+        case 'EN_ROUTE':
         case 'en_route':
-            return { label: 'Em andamento', color: '#0EA5E9', bgColor: '#E0F2FE', icon: MapPin };
+            return { label: 'A caminho', color: Colors.light.primary, bgColor: '#FFF4E6', icon: Navigation };
+        case 'ARRIVED':
+            return { label: 'No local', color: '#0284C7', bgColor: '#E0F2FE', icon: MapPin };
+        case 'IN_PROGRESS':
+            return { label: 'Em execução', color: '#059669', bgColor: '#D1FAE5', icon: Wrench };
         case 'FINISHED':
-            return { label: 'Finalizado', color: '#64748B', bgColor: '#F1F5F9', icon: CheckCircle2 };
+            return { label: 'Concluído', color: '#16A34A', bgColor: '#DCFCE7', icon: CheckCircle2 };
+        case 'CANCELED':
         case 'canceled':
-            return { label: 'Cancelado', color: '#94A3B8', bgColor: '#F8FAFC', icon: XCircle };
+            return { label: 'Cancelado', color: '#EF4444', bgColor: '#FEE2E2', icon: XCircle };
         default:
             return { label: status, color: '#64748B', bgColor: '#F1F5F9', icon: Info };
     }
@@ -77,7 +91,7 @@ export function ServiceCard({
     title,
     category,
     providerName,
-    providerRating = 4.8,
+    providerRating,
     providerVerified = true,
     providerImage,
     dateTime,
@@ -170,8 +184,10 @@ export function ServiceCard({
                         </View>
                         <View style={styles.ratingRow}>
                             <Star size={12} color="#F59E0B" fill="#F59E0B" />
-                            <Text style={styles.ratingText}>{providerRating}</Text>
-                            <Text style={styles.verifiedTag}> • Verificado</Text>
+                            <Text style={styles.ratingText}>
+                                {providerRating != null && providerRating > 0 ? providerRating.toFixed(1) : '—'}
+                            </Text>
+                            {providerVerified && <Text style={styles.verifiedTag}> • Verificado</Text>}
                         </View>
                     </View>
                 </View>

@@ -19,14 +19,19 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-function flowSubtitle(status?: string): string {
+function flowSubtitle(status?: string, doneProviderAt?: string | null): string {
   if (status === 'finding') return 'O chat libera após a confirmação do pedido.';
   if (status === 'offered') return 'Escolha uma oferta para continuar o fluxo.';
   if (status === 'accepted' || status === 'confirmed') return 'Atendimento confirmado. Use o chat para alinhar detalhes.';
   if (status === 'en_route') return 'Prestador a caminho. Use o chat para combinar referência de chegada.';
   if (status === 'arrived') return 'Prestador no local. Converse e acompanhe o orçamento.';
   if (status === 'quote_provided') return 'Orçamento disponível para aprovação.';
-  if (status === 'quote_accepted') return 'Serviço em execução.';
+  if (status === 'quote_accepted') {
+    if (doneProviderAt) {
+      return 'Prestador finalizou o serviço. Confirme para concluir.';
+    }
+    return 'Serviço em execução.';
+  }
   if (status === 'done' || status === 'completed') return 'Pedido finalizado. Histórico da conversa disponível.';
   return 'As atualizações aparecem nesta conversa.';
 }
@@ -135,19 +140,20 @@ export default function ChatRoomScreen() {
   }, [messages, thread?.doneProviderAt, thread?.doneClientAt, thread?.hasClientReview, clientConfirmed, reviewDone]);
 
   const timelineItems = useMemo(
-    () => ['Buscando', 'Ofertas', 'Aceite', 'Pago', 'A caminho', 'Finalizado'],
+    () => ['Confirmado', 'A caminho', 'No local', 'Em execução', 'Concluído'],
     []
   );
 
   const currentStepIndex = useMemo(() => {
     const map: Record<string, number> = {
-      finding: 0,
-      offered: 1,
-      accepted: 2,
-      paid: 3,
-      en_route: 4,
-      done: 5,
-      completed: 5,
+      accepted: 0,
+      confirmed: 0,
+      en_route: 1,
+      arrived: 2,
+      quote_provided: 2,
+      quote_accepted: 3,
+      done: 4,
+      completed: 4,
     };
     return map[thread?.status || ''] ?? -1;
   }, [thread?.status]);
@@ -222,7 +228,7 @@ export default function ChatRoomScreen() {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle}>{headerName}</Text>
-          <Text style={styles.headerSubtitle}>{flowSubtitle(thread.status)}</Text>
+          <Text style={styles.headerSubtitle}>{flowSubtitle(thread.status, thread.doneProviderAt)}</Text>
         </View>
         <View style={styles.headerActions}>
           <TouchableOpacity onPress={() => router.push(`/ticket/${thread.requestId}`)} style={styles.headerIconBtn}>
