@@ -1,12 +1,25 @@
 -- Migration: 20260901020000_lifecycle_matching_p0.sql
 -- Description: Patch P0 - Order Lifecycle & Realtime Matching
---   1. Update submit_provider_offer to notify client on new offer (without duplicates on retry)
---   2. Add client_keep_request_open_v1 to allow client to keep search open in background (extends expires_at by 48h)
+--   1. Allow 'offer' in notifications type constraint
+--   2. Update submit_provider_offer to notify client on new offer (without duplicates on retry)
+--   3. Add client_keep_request_open_v1 to allow client to keep search open in background (extends expires_at by 48h)
 
 BEGIN;
 
 -- ═══════════════════════════════════════════════════════════
--- SECTION 1: Updated submit_provider_offer with offer notification
+-- SECTION 1: Update notifications type check constraint
+-- ═══════════════════════════════════════════════════════════
+
+ALTER TABLE public.notifications
+  DROP CONSTRAINT IF EXISTS notifications_type_check;
+
+ALTER TABLE public.notifications
+  ADD CONSTRAINT notifications_type_check
+  CHECK (type IN ('request', 'message', 'system', 'partner', 'offer'));
+
+
+-- ═══════════════════════════════════════════════════════════
+-- SECTION 2: Updated submit_provider_offer with offer notification
 -- ═══════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.submit_provider_offer(
@@ -161,7 +174,7 @@ GRANT EXECUTE ON FUNCTION public.submit_provider_offer(UUID, NUMERIC, INTEGER, T
 
 
 -- ═══════════════════════════════════════════════════════════
--- SECTION 2: RPC client_keep_request_open_v1 (Background Search)
+-- SECTION 3: RPC client_keep_request_open_v1 (Background Search)
 -- ═══════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.client_keep_request_open_v1(
