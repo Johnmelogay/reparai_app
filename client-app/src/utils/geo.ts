@@ -136,3 +136,48 @@ export const formatDistance = (distanceKm: number): string => {
     }
     return `${distanceKm.toFixed(1)} km`;
 };
+
+/**
+ * Calculates the great-circle distance (Haversine) between two coordinate pairs,
+ * validating bounds (-90..90 for lat, -180..180 for lng).
+ * Returns null if any coordinate is missing or invalid.
+ */
+export const calculateApproximateDistance = (
+    coord1?: { lat?: number | null; lng?: number | null; latitude?: number | null; longitude?: number | null } | null,
+    coord2?: { lat?: number | null; lng?: number | null; latitude?: number | null; longitude?: number | null } | null
+): number | null => {
+    if (!coord1 || !coord2) return null;
+
+    const lat1 = toFiniteNumber(coord1.lat ?? coord1.latitude);
+    const lng1 = toFiniteNumber(coord1.lng ?? coord1.longitude);
+    const lat2 = toFiniteNumber(coord2.lat ?? coord2.latitude);
+    const lng2 = toFiniteNumber(coord2.lng ?? coord2.longitude);
+
+    if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) {
+        return null;
+    }
+
+    if (lat1 < -90 || lat1 > 90 || lat2 < -90 || lat2 > 90 || lng1 < -180 || lng1 > 180 || lng2 < -180 || lng2 > 180) {
+        return null;
+    }
+
+    return calculateDistance({ latitude: lat1, longitude: lng1 }, { latitude: lat2, longitude: lng2 });
+};
+
+/**
+ * Formats an approximate distance in km:
+ * - below 1 km: meters (e.g. "≈ 650 m")
+ * - 1 km or more: one decimal place with comma (e.g. "≈ 4,2 km")
+ * Returns null if distance is invalid or negative.
+ */
+export const formatApproximateDistance = (distanceKm: number | null | undefined): string | null => {
+    if (distanceKm == null || !Number.isFinite(distanceKm) || distanceKm < 0) {
+        return null;
+    }
+    if (distanceKm < 1) {
+        const meters = Math.round(distanceKm * 1000);
+        return `≈ ${meters} m`;
+    }
+    const formattedKm = distanceKm.toFixed(1).replace('.', ',');
+    return `≈ ${formattedKm} km`;
+};

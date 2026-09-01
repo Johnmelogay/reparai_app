@@ -29,9 +29,12 @@ import {
     AppStateStatus,
     FlatList,
     Keyboard,
+    KeyboardAvoidingView,
     Modal,
+    Platform,
     Pressable,
     RefreshControl,
+    ScrollView,
     StyleSheet,
     Switch,
     Text,
@@ -40,6 +43,8 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+const ETA_OPTIONS = [10, 15, 20, 30, 45, 60] as const;
 
 type OfferDraft = {
     price: number;
@@ -246,7 +251,7 @@ export default function JobsScreen() {
     const [offerModalVisible, setOfferModalVisible] = useState(false);
     const [selectedOfferRequest, setSelectedOfferRequest] = useState<OpenRequest | null>(null);
     const [offerPrice, setOfferPrice] = useState('');
-    const [offerEta, setOfferEta] = useState('');
+    const [selectedEta, setSelectedEta] = useState<number | null>(null);
     const [offerMessage, setOfferMessage] = useState('');
     const [isTogglingOnline, setIsTogglingOnline] = useState(false);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -258,20 +263,19 @@ export default function JobsScreen() {
 
     const buildDefaultOffer = useCallback((request: OpenRequest): OfferDraft => {
         const fallbackPrice = profile?.base_fee ?? 50;
-        const fallbackEta = profile?.type === 'FIXED' ? 60 : 30;
         const diagnosis = request.ai_result_json?.problem_guess || request.user_text || 'seu atendimento';
         return {
             price: fallbackPrice,
-            estimatedTime: fallbackEta,
+            estimatedTime: 0,
             message: `Posso ajudar com ${diagnosis}. Vamos alinhar os detalhes pelo chat oficial do app.`,
         };
-    }, [profile?.base_fee, profile?.type]);
+    }, [profile?.base_fee]);
 
     const openOfferModal = useCallback((request: OpenRequest, draft?: OfferDraft) => {
         const defaultDraft = draft || buildDefaultOffer(request);
         setSelectedOfferRequest(request);
         setOfferPrice(String(defaultDraft.price));
-        setOfferEta(String(defaultDraft.estimatedTime));
+        setSelectedEta(draft?.estimatedTime && draft.estimatedTime > 0 ? draft.estimatedTime : null);
         setOfferMessage(defaultDraft.message);
         setOfferModalVisible(true);
     }, [buildDefaultOffer]);
@@ -448,7 +452,6 @@ export default function JobsScreen() {
         if (!selectedOfferRequest) return;
 
         const normalizedPrice = Number.parseFloat(offerPrice.replace(',', '.'));
-        const normalizedEta = Number.parseInt(offerEta, 10);
         const normalizedMessage = offerMessage.trim();
 
         if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
@@ -456,8 +459,8 @@ export default function JobsScreen() {
             return;
         }
 
-        if (!Number.isFinite(normalizedEta) || normalizedEta < 5 || normalizedEta > 240) {
-            Alert.alert('Tempo inválido', 'Informe um tempo estimado entre 5 e 240 minutos.');
+        if (!selectedEta) {
+            Alert.alert('Atenção', 'Informe o tempo estimado de chegada.');
             return;
         }
 
@@ -468,15 +471,16 @@ export default function JobsScreen() {
 
         const sent = await handleAcceptRequest(selectedOfferRequest, {
             price: normalizedPrice,
-            estimatedTime: normalizedEta,
+            estimatedTime: selectedEta,
             message: normalizedMessage,
         });
 
         if (sent) {
             setOfferModalVisible(false);
             setSelectedOfferRequest(null);
+            setSelectedEta(null);
         }
-    }, [handleAcceptRequest, offerEta, offerMessage, offerPrice, selectedOfferRequest]);
+    }, [handleAcceptRequest, offerMessage, offerPrice, selectedEta, selectedOfferRequest]);
 
     const handleOpenDetails = useCallback((request: OpenRequest) => {
         router.push({
@@ -609,83 +613,105 @@ export default function JobsScreen() {
                 onRequestClose={() => {
                     setOfferModalVisible(false);
                     setSelectedOfferRequest(null);
+                    setSelectedEta(null);
                 }}
             >
-                <Pressable
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                     style={styles.modalBackdrop}
-                    onPress={Keyboard.dismiss}
                 >
                     <Pressable
-                        style={styles.modalCard}
-                        onPress={(e) => e.stopPropagation()} // Prevent dismissing when clicking the card itself
+                        style={styles.modalBackdropPressable}
+                        onPress={Keyboard.dismiss}
                     >
-                        <Text style={styles.modalTitle}>Fazer oferta</Text>
-                        <Text style={styles.modalSubtitle} numberOfLines={2}>
-                            {selectedOfferRequest?.ai_result_json?.problem_guess || selectedOfferRequest?.user_text || 'Atendimento solicitado'}
-                        </Text>
-
-                        <View style={styles.modalField}>
-                            <Text style={styles.modalLabel}>Taxa de deslocamento (R$)</Text>
-                            <TextInput
-                                value={offerPrice}
-                                onChangeText={setOfferPrice}
-                                keyboardType="decimal-pad"
-                                style={styles.modalInput}
-                                placeholder="Ex: 60"
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </View>
-
-                        <View style={styles.modalField}>
-                            <Text style={styles.modalLabel}>Tempo estimado (min)</Text>
-                            <TextInput
-                                value={offerEta}
-                                onChangeText={setOfferEta}
-                                keyboardType="number-pad"
-                                style={styles.modalInput}
-                                placeholder="Ex: 30"
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </View>
-
-                        <View style={styles.modalField}>
-                            <Text style={styles.modalLabel}>Mensagem para o cliente</Text>
-                            <TextInput
-                                value={offerMessage}
-                                onChangeText={setOfferMessage}
-                                style={[styles.modalInput, styles.modalInputMultiline]}
-                                multiline
-                                maxLength={280}
-                                placeholder="Explique como você pode ajudar e convide para continuar no chat."
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </View>
-
-                        <View style={styles.modalActions}>
-                            <TouchableOpacity
-                                style={styles.modalCancelBtn}
-                                onPress={() => {
-                                    setOfferModalVisible(false);
-                                    setSelectedOfferRequest(null);
-                                }}
-                                disabled={submittingAction === 'accept'}
+                        <Pressable
+                            style={styles.modalCard}
+                            onPress={(e) => e.stopPropagation()}
+                        >
+                            <ScrollView
+                                showsVerticalScrollIndicator={false}
+                                keyboardShouldPersistTaps="handled"
+                                bounces={false}
                             >
-                                <Text style={styles.modalCancelText}>Cancelar</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.modalSubmitBtn, submittingAction === 'accept' && styles.actionBtnDisabled]}
-                                onPress={handleSubmitOfferFromModal}
-                                disabled={submittingAction === 'accept'}
-                            >
-                                {submittingAction === 'accept' ? (
-                                    <ActivityIndicator size="small" color="#fff" />
-                                ) : (
-                                    <Text style={styles.modalSubmitText}>Enviar oferta</Text>
-                                )}
-                            </TouchableOpacity>
-                        </View>
+                                <Text style={styles.modalTitle}>Fazer oferta</Text>
+                                <Text style={styles.modalSubtitle} numberOfLines={2}>
+                                    {selectedOfferRequest?.ai_result_json?.problem_guess || selectedOfferRequest?.user_text || 'Atendimento solicitado'}
+                                </Text>
+
+                                <View style={styles.modalField}>
+                                    <Text style={styles.modalLabel}>Taxa de deslocamento (R$)</Text>
+                                    <TextInput
+                                        value={offerPrice}
+                                        onChangeText={setOfferPrice}
+                                        keyboardType="decimal-pad"
+                                        style={styles.modalInput}
+                                        placeholder="Ex: 60"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </View>
+
+                                <View style={styles.modalField}>
+                                    <Text style={styles.modalLabel}>Em quanto tempo você consegue chegar ao local?</Text>
+                                    <View style={styles.etaChipsRow}>
+                                        {ETA_OPTIONS.map((min) => {
+                                            const isSelected = selectedEta === min;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={min}
+                                                    style={[styles.etaChip, isSelected && styles.etaChipSelected]}
+                                                    onPress={() => setSelectedEta(min)}
+                                                    activeOpacity={0.7}
+                                                >
+                                                    <Text style={[styles.etaChipText, isSelected && styles.etaChipTextSelected]}>
+                                                        {min} min
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
+                                </View>
+
+                                <View style={styles.modalField}>
+                                    <Text style={styles.modalLabel}>Mensagem para o cliente</Text>
+                                    <TextInput
+                                        value={offerMessage}
+                                        onChangeText={setOfferMessage}
+                                        style={[styles.modalInput, styles.modalInputMultiline]}
+                                        multiline
+                                        maxLength={280}
+                                        placeholder="Explique como você pode ajudar e convide para continuar no chat."
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </View>
+
+                                <View style={styles.modalActions}>
+                                    <TouchableOpacity
+                                        style={styles.modalCancelBtn}
+                                        onPress={() => {
+                                            setOfferModalVisible(false);
+                                            setSelectedOfferRequest(null);
+                                            setSelectedEta(null);
+                                        }}
+                                        disabled={submittingAction === 'accept'}
+                                    >
+                                        <Text style={styles.modalCancelText}>Cancelar</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.modalSubmitBtn, submittingAction === 'accept' && styles.actionBtnDisabled]}
+                                        onPress={handleSubmitOfferFromModal}
+                                        disabled={submittingAction === 'accept'}
+                                    >
+                                        {submittingAction === 'accept' ? (
+                                            <ActivityIndicator size="small" color="#fff" />
+                                        ) : (
+                                            <Text style={styles.modalSubmitText}>Enviar oferta</Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            </ScrollView>
+                        </Pressable>
                     </Pressable>
-                </Pressable>
+                </KeyboardAvoidingView>
             </Modal>
         </SafeAreaView>
     );
@@ -1006,7 +1032,11 @@ const styles = StyleSheet.create({
     },
     modalBackdrop: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.35)',
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'flex-end',
+    },
+    modalBackdropPressable: {
+        flex: 1,
         justifyContent: 'flex-end',
     },
     modalCard: {
@@ -1016,6 +1046,36 @@ const styles = StyleSheet.create({
         paddingHorizontal: Layout.spacing.md,
         paddingTop: Layout.spacing.md,
         paddingBottom: Layout.spacing.lg,
+        maxHeight: '90%',
+    },
+    etaChipsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 4,
+    },
+    etaChip: {
+        paddingVertical: 9,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: Colors.light.border,
+        backgroundColor: '#F9FAFB',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    etaChipSelected: {
+        borderColor: Colors.light.primary,
+        backgroundColor: Colors.light.primary + '18',
+    },
+    etaChipText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: Colors.light.textSecondary,
+    },
+    etaChipTextSelected: {
+        color: Colors.light.primary,
+        fontWeight: '800',
     },
     modalTitle: {
         fontSize: 18,

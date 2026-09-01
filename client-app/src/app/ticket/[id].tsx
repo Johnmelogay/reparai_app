@@ -29,7 +29,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import SuccessModal from '@/components/SuccessModal';
 import { Card } from '@/components/ui/Card';
 import { BRANDED_MAP_STYLE } from '@/constants/MapStyles';
-import { parseGeoPoint } from '@/utils/geo';
+import { calculateApproximateDistance, formatApproximateDistance, parseGeoPoint } from '@/utils/geo';
 
 
 const { width, height } = Dimensions.get('window');
@@ -84,6 +84,28 @@ const STATUS_CONFIG: Record<TicketStatus, { label: string; icon: any; color: str
     expired: { label: 'Expirado', icon: Clock, color: '#9CA3AF', bg: '#F3F4F6' },
     disputed: { label: 'Em Disputa', icon: Shield, color: '#DC2626', bg: '#FEE2E2' },
 };
+
+function getTrackingSubtitle(
+    status: 'confirmed' | 'en_route',
+    distStr: string | null,
+    etaMin: number | null
+): string {
+    const hasDist = !!distStr;
+    const hasEta = etaMin != null && Number.isFinite(etaMin) && etaMin > 0;
+
+    if (status === 'confirmed') {
+        if (hasDist && hasEta) return `${distStr} • previsão de ~${etaMin} min`;
+        if (hasEta) return `Previsão de ~${etaMin} min`;
+        if (hasDist) return `${distStr} de distância`;
+        return 'Previsão indisponível';
+    }
+
+    // en_route
+    if (hasDist && hasEta) return `${distStr} • chegada em ~${etaMin} min`;
+    if (hasEta) return `Chegada em ~${etaMin} min`;
+    if (hasDist) return `${distStr} de distância`;
+    return 'Previsão indisponível';
+}
 
 interface TicketData {
     id: string;
@@ -142,6 +164,16 @@ export default function TicketDetailScreen() {
         }
         return null;
     });
+
+    const approximateDistanceStr = useMemo(() => {
+        if (!ticket?.lat || !ticket?.lng || !provider?.location) return null;
+        const distKm = calculateApproximateDistance(
+            { latitude: ticket.lat, longitude: ticket.lng },
+            { latitude: provider.location.lat, longitude: provider.location.lng }
+        );
+        return formatApproximateDistance(distKm);
+    }, [ticket?.lat, ticket?.lng, provider?.location]);
+
     const [loading, setLoading] = useState(true);
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
@@ -759,7 +791,7 @@ export default function TicketDetailScreen() {
                                     <View style={styles.etaRowDetail}>
                                         <Clock size={14} color={Colors.light.primary} />
                                         <Text style={styles.etaTextDetail}>
-                                            {estimatedTime != null ? `Previsão: ~${estimatedTime} min` : 'Previsão indisponível'}
+                                            {getTrackingSubtitle('confirmed', approximateDistanceStr, estimatedTime)}
                                         </Text>
                                     </View>
                                 )}
@@ -767,7 +799,7 @@ export default function TicketDetailScreen() {
                                     <View style={styles.etaRowDetail}>
                                         <Navigation size={14} color={Colors.light.primary} />
                                         <Text style={styles.etaTextDetail}>
-                                            {estimatedTime != null ? `Chega em ~${estimatedTime} min` : 'Previsão indisponível'}
+                                            {getTrackingSubtitle('en_route', approximateDistanceStr, estimatedTime)}
                                         </Text>
                                     </View>
                                 )}
@@ -1283,6 +1315,7 @@ const styles = StyleSheet.create({
     providerInfoDetail: {
         flex: 1,
         marginLeft: 16,
+        marginRight: 8,
     },
     providerNameDetail: {
         fontSize: 17,
@@ -1292,13 +1325,15 @@ const styles = StyleSheet.create({
     etaRowDetail: {
         flexDirection: 'row',
         alignItems: 'center',
+        flexWrap: 'wrap',
         marginTop: 4,
     },
     etaTextDetail: {
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '700',
         color: Colors.light.primary,
         marginLeft: 6,
+        flexShrink: 1,
     },
     callButtonDetail: {
         width: 44,
