@@ -43,7 +43,7 @@ export function useOpenRequests() {
         staleTime: 30 * 1000,
     });
 
-    // Realtime: listen for requests and provider_offers events
+    // Realtime: listen for open_requests_signal and provider_offers events
     useEffect(() => {
         if (!userId) return;
 
@@ -57,9 +57,9 @@ export function useOpenRequests() {
             .on(
                 'postgres_changes',
                 {
-                    event: '*',
+                    event: 'UPDATE',
                     schema: 'public',
-                    table: 'requests',
+                    table: 'open_requests_signal',
                 },
                 () => {
                     invalidateAndRefetch();

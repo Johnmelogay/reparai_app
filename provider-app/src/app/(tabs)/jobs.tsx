@@ -449,14 +449,20 @@ export default function JobsScreen() {
             setSubmittingRequestId(request.id);
             setSubmittingAction('reject');
 
-            const { error } = await supabase.rpc('reject_provider_offer', {
+            const { error } = await supabase.rpc('dismiss_provider_request_v1', {
                 p_request_id: request.id,
             });
 
             if (error) throw error;
             await refetch();
         } catch (error: any) {
-            Alert.alert('Erro ao recusar pedido', error?.message || 'Não foi possível recusar este pedido.');
+            const errorMsg = String(error?.message || '');
+            if (errorMsg.includes('request_unavailable')) {
+                Alert.alert('Pedido indisponível', 'Este pedido não está mais disponível.');
+            } else {
+                Alert.alert('Erro ao recusar pedido', error?.message || 'Não foi possível recusar este pedido.');
+            }
+            await refetch();
         } finally {
             setSubmittingRequestId(null);
             setSubmittingAction(null);

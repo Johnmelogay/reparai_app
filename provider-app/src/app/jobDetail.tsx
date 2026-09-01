@@ -81,17 +81,28 @@ export default function JobDetailScreen() {
 
     const handleReject = useCallback(async () => {
         if (!request) return;
-        const { error: rejectError } = await supabase.rpc('reject_provider_offer', {
-            p_request_id: request.id,
-        });
+        try {
+            const { error: rejectError } = await supabase.rpc('dismiss_provider_request_v1', {
+                p_request_id: request.id,
+            });
 
-        if (rejectError) {
-            Alert.alert('Erro ao recusar', rejectError.message || 'Não foi possível recusar este pedido.');
-            return;
+            if (rejectError) {
+                const errorMsg = String(rejectError.message || '');
+                if (errorMsg.includes('request_unavailable')) {
+                    Alert.alert('Pedido indisponível', 'Este pedido não está mais disponível.');
+                } else {
+                    Alert.alert('Erro ao recusar', rejectError.message || 'Não foi possível recusar este pedido.');
+                }
+                router.replace('/(tabs)/jobs');
+                return;
+            }
+
+            Alert.alert('Pedido recusado', 'Você não receberá novas ações para este ticket.');
+            router.replace('/(tabs)/jobs');
+        } catch (e: any) {
+            Alert.alert('Erro ao recusar', e?.message || 'Não foi possível recusar este pedido.');
+            router.replace('/(tabs)/jobs');
         }
-
-        Alert.alert('Pedido recusado', 'Você não receberá novas ações para este ticket.');
-        router.replace('/(tabs)/jobs');
     }, [request, router]);
 
     const handleOffer = useCallback(() => {
